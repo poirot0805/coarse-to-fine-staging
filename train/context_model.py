@@ -14,6 +14,8 @@ from motion_inbetween.train import rmi
 from motion_inbetween.train import utils as train_utils
 
 SEQNUM_GEO=12
+ATTENTION_MODE = "NOMASK"
+INIT_INTERP = "POS-ONLY"
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
     assert geo.shape[-1]==9
@@ -129,14 +131,27 @@ def get_midway_targets(seq_slice, midway_targets_amount, midway_targets_p):
 
 def get_attention_mask(window_len, context_len, target_idx, device,
                        midway_targets=()):
+    global ATTENTION_MODE
     atten_mask = torch.ones(window_len, window_len,
                             device=device, dtype=torch.bool)
-    #atten_mask[:, target_idx] = False
-    #atten_mask[:, :context_len] = False
-    #atten_mask[:, midway_targets] = False
-    atten_mask[:, :target_idx + 1] = False
+    # old-1:遮住未知项
+    if ATTENTION_MODE=="VANILLA":
+        atten_mask[:, target_idx] = False
+        atten_mask[:, :context_len] = False
+        atten_mask[:, midway_targets] = False
+
+    # new:对角线下不被遮罩
+    if ATTENTION_MODE=="PRE":
+        print(ATTENTION_MODE)
+        atten_mask.triu_(diagonal=1)
+        atten_mask[:, target_idx] = False
+        atten_mask[:, :context_len] = False
+        atten_mask[:, midway_targets] = False
+    
+    # old-2:全部不遮罩
+    if ATTENTION_MODE=="NOMASK":
+        atten_mask[:, :target_idx + 1] = False
     # assert context_len==13
-    print("NO atten mask!")
     atten_mask = atten_mask.unsqueeze(0)
 
     # (1, seq, seq)
@@ -177,10 +192,11 @@ def get_keyframe_pos_indices(window_len, seq_slice, dtype, device):
     return keyframe_pos_indices[None]
 
 
-def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice):
+def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice=None):
     # set root position of missing part to linear interpolation of
     # root position between constrained frames (i.e. last context frame,
     # midway target frames and target frame).
+    global INIT_INTERP
     constrained_frames = [seq_slice.start - 1, seq_slice.stop]
     constrained_frames.extend(midway_targets)
     constrained_frames.sort()
@@ -197,10 +213,18 @@ def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice):
                 x[..., end_slice, p_slice],
                 end_idx - start_idx - 1
         )
+        # TODO:interp on rotations
+
     return x
 
 
 def train(config):
+    global ATTENTION_MODE
+    global INIT_INTERP
+    global SEQNUM_GEO
+    ATTENTION_MODE = config["train"]["attention_mode"]
+    INIT_INTERP = config["train"]["init_interp"]
+
     indices = config["indices"]
     info_interval = config["visdom"]["interval"]
     eval_interval = config["visdom"]["interval_eval"]
@@ -297,7 +321,9 @@ def train(config):
             global_positions = positions
 
             # randomize transition length
-            trans_len = random.randint(min_trans, max_trans)# random.choice([random.randint(min_trans, max_trans),min(frame_nums)-2])
+            # trans_len = random.randint(min_trans, max_trans)# random.choice([random.randint(min_trans, max_trans),min(frame_nums)-2])
+            max_trans_ = random.choice([max_trans,min(frame_nums)-2])
+            trans_len = random.randint(min_trans, max_trans_)
             target_idx = context_len + trans_len
             seq_slice = slice(context_len, target_idx)
 

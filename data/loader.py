@@ -128,6 +128,9 @@ class BvhDataSet(Dataset):
             # ADD:追加跨帧数据
             if clip_cnt>0:
                 self.extend_frames.append(anim.step_num)
+                
+                """
+                self.extend_frames.append(anim.step_num)
                 if self.augment:
                     for cross_step in range(2,6):
                         if anim.step_num/cross_step<12: # NOTICE:原来是12，需要填补太多了
@@ -144,7 +147,7 @@ class BvhDataSet(Dataset):
                             self.extend_frames.append(npos.shape[0])
                         else:
                             self.extend_frames.append(self.window)
-            
+                """
 
     def __len__(self):
         count = 0

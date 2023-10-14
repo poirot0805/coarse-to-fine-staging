@@ -31,7 +31,9 @@ def load_feature_npy(client_id,add_geo,remove_list=[]):
     oid = {id: i for i, id in enumerate(ids)}   # dict{41:第0颗牙} 28颗牙
     data=np.empty((0,108),dtype=np.float32)
     zero_placeholder=np.zeros((1,108),dtype=np.float32)
-    root_path=r"/home/mjy/motion-inbetween/feature"#"/home/mjy/PoinTr/experiments/Motion_Feature_snow"#"/home/mjy/motion-inbetween/feature"# r"E:\PROJECTS\PoinTr\data\Motion\motionfeature_all"
+    root_path=r"/media/backup/home-2023-08-25/mjy/motion-inbetween/feature"
+    #r"/home/mjy/motion-inbetween/feature" 没有备份之前的pointr路径
+    #"/home/mjy/PoinTr/experiments/Motion_Feature_snow"没有备份之前的snow路径#"/home/mjy/motion-inbetween/feature"# r"E:\PROJECTS\PoinTr\data\Motion\motionfeature_all"
     for i, id in enumerate(ids):
         npy_name=f"{client_id}-{id}.npy"
         npy_path=os.path.join(root_path,npy_name)
@@ -86,7 +88,7 @@ def load_tooth_json(json_path,order='M9D',start=None,remove_list=[]):
             if (positions[step_num-1,i,:]==[0.,0.,0.]).all():
                 missing_list.add(i)
         
-        #positions[:,remove_list,:]=0
+        #positions[:,remove_list,:]=0   要还原为原始位置，所以removed teeth不要覆盖掉
         #rotations[:,remove_list,:]=0
         #rotations[:,remove_list,-1]=1   
         
