@@ -79,7 +79,7 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
         print("Train stats load from {}".format(stats_path))
     else:
         # calculate training stats
-        device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
         dataset, data_loader = train_utils.init_bvh_dataset(
             config, dataset_name, device, shuffle=True, dtype=torch.float64)
 
@@ -142,7 +142,7 @@ def get_attention_mask(window_len, context_len, target_idx, device,
 
     # new:对角线下不被遮罩
     if ATTENTION_MODE=="PRE":
-        print(ATTENTION_MODE)
+        # print(ATTENTION_MODE)
         atten_mask.triu_(diagonal=1)
         atten_mask[:, target_idx] = False
         atten_mask[:, :context_len] = False
@@ -224,7 +224,7 @@ def train(config):
     global SEQNUM_GEO
     ATTENTION_MODE = config["train"]["attention_mode"]
     INIT_INTERP = config["train"]["init_interp"]
-
+    print(ATTENTION_MODE)
     indices = config["indices"]
     info_interval = config["visdom"]["interval"]
     eval_interval = config["visdom"]["interval_eval"]
@@ -234,7 +234,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -323,7 +323,11 @@ def train(config):
             # randomize transition length
             # trans_len = random.randint(min_trans, max_trans)# random.choice([random.randint(min_trans, max_trans),min(frame_nums)-2])
             max_trans_ = random.choice([max_trans,min(frame_nums)-2])
-            trans_len = random.randint(min_trans, max_trans_)
+            trans_len = max_trans_
+            if min_trans>= max_trans_:
+                trans_len = max_trans_
+            else:
+                trans_len = random.randint(min_trans, max_trans_)
             target_idx = context_len + trans_len
             seq_slice = slice(context_len, target_idx)
 
@@ -595,7 +599,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
             rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
         
         (gpos_batch_loss, gquat_batch_loss,
-         npss_batch_loss, npss_batch_weights) = \
+         npss_batch_loss, npss_batch_weights,_,_) = \
             benchmark.get_rmi_style_batch_loss(
                 positions, rotations, pos_new, rot_new, None,
                 context_len, target_idx, mean_rmi, std_rmi
