@@ -16,6 +16,7 @@ from motion_inbetween.train import utils as train_utils
 SEQNUM_GEO=12
 ATTENTION_MODE = "NOMASK"
 INIT_INTERP = "POS-ONLY"
+zscore_MODE = "seq"
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
     assert geo.shape[-1]==9
@@ -213,6 +214,20 @@ def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice=None)
                 x[..., end_slice, p_slice],
                 end_idx - start_idx - 1
         )
+    if INIT_INTERP=="POS-ROT":
+        for i in range(len(constrained_frames) - 1):
+            start_idx = constrained_frames[i]
+            end_idx = constrained_frames[i + 1]
+            start_slice = slice(start_idx, start_idx + 1)
+            end_slice = slice(end_idx, end_idx + 1)
+            inbetween_slice = slice(start_idx + 1, end_idx)
+
+            x[..., inbetween_slice, r_slice] = \
+                benchmark.get_linear_interpolation(
+                    x[..., start_slice, r_slice],
+                    x[..., end_slice, r_slice],
+                    end_idx - start_idx - 1
+            )
         # TODO:interp on rotations
 
     return x
@@ -222,15 +237,18 @@ def train(config):
     global ATTENTION_MODE
     global INIT_INTERP
     global SEQNUM_GEO
+    global zscore_MODE
     ATTENTION_MODE = config["train"]["attention_mode"]
     INIT_INTERP = config["train"]["init_interp"]
-
+    zscore_MODE = config["train"]["zscore_MODE"]    # normal/none/seq
+    print(ATTENTION_MODE,INIT_INTERP,zscore_MODE)
     indices = config["indices"]
     info_interval = config["visdom"]["interval"]
     eval_interval = config["visdom"]["interval_eval"]
     eval_trans = config["visdom"]["eval_trans"]
     
     rp_slice = slice(indices["r_start_idx"], indices["p_end_idx"])
+    r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
@@ -351,17 +369,26 @@ def train(config):
 
             # prepare model input
             x_gt = get_model_input(positions, rot_6d)
+            x_gt_zscore = (x_gt - mean) / std
             if add_geo_FLAG:
                 geo_ctrl = get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
+                if zscore_MODE=="seq":
+                    x_gt_ = (x_gt - mean) / std
+                    x_gt_zscore = torch.cat([geo_ctrl,x_gt_],dim=1)
                 x_gt = torch.cat([geo_ctrl,x_gt],dim=1)    # GEO: (BATCH,SEQ*,DIMS)
-            x_gt_zscore = (x_gt - mean) / std
+            
+            if zscore_MODE=="normal":
+                x_gt_zscore = (x_gt - mean) / std
+            elif zscore_MODE=="no":
+                x_gt_zscore = x_gt
+
 
             x = torch.cat([
                 x_gt_zscore * data_mask,
                 data_mask.expand(*x_gt_zscore.shape[:-1], data_mask.shape[-1])
             ], dim=-1)
 
-            x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice)
+            x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice, r_slice)
 
             # calculate model output y
             optimizer.zero_grad()
@@ -374,8 +401,8 @@ def train(config):
                     model_out[..., seq_slice, c_slice]) 
             y = x_gt_zscore.clone().detach()
             y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
-
-            y = y * std + mean
+            if zscore_MODE!="no":
+                y = y * std + mean
 
             if add_geo_FLAG:
                 positions = torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),
@@ -681,6 +708,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         tensor, tensor: new positions, new rotations with predicted animation
         with same shape as input.
     """
+    global zscore_MODE
     dtype = positions.dtype
     device = positions.device
     window_len = positions.shape[-3]+SEQNUM_GEO if geo is not None else positions.shape[-3]
@@ -706,14 +734,21 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             atten_mask = atten_mask.clone().detach()
             atten_mask[0, :, midway_targets] = False
 
-        # prepare model input
+        # prepare model input          
         geo_ctrl=None
         x_orig = get_model_input(positions, rotations)
+        x_zscore = (x_orig - mean) / std
         if geo is not None:
             geo_ctrl=get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
+            if zscore_MODE=="seq":
+                x_ = (x_orig - mean) / std
+                x_zscore = torch.cat([geo_ctrl,x_],dim=1)
             x_orig=torch.cat([geo_ctrl,x_orig],dim=1)    # GEO: (BATCH,SEQ*,DIMS)
         # zscore
-        x_zscore = (x_orig - mean) / std
+        if zscore_MODE=="normal":
+            x_zscore = (x_orig - mean) / std
+        elif zscore_MODE=="no":
+            x_zscore = x_orig
 
         # data mask (seq, 1)
         data_mask = get_data_mask(
@@ -729,7 +764,8 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         ], dim=-1)
 
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
-        x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice)
+        r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
+        x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice)
 
         # calculate model output y
         model_out = model(x, keyframe_pos_idx, mask=atten_mask)
@@ -740,7 +776,8 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             y = train_utils.anim_post_process(y, x_zscore, seq_slice)
 
         # reverse zscore
-        y = y * std + mean
+        if zscore_MODE!="no":
+            y = y * std + mean
         # notice: 原来的版本中rotations一直是9D的，新版本输入evaluation的是6D的，因此转化一下
         rotations = data_utils.matrix6D_to_9D_torch(rotations)
         # GEO:
