@@ -17,12 +17,21 @@ class ContextTransformer(nn.Module):
         self.dropout = config["dropout"]
         self.pre_lnorm = config["pre_lnorm"]
         self.n_layer = config["n_layer"]
+        self.geo_embed = config["geo_embed"]
 
         self.encoder = nn.Sequential(
             nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]),
             nn.PReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.config["d_encoder_h"], self.config["d_model"]),
+            nn.PReLU(),
+            nn.Dropout(self.dropout)
+        )
+        self.geo_encoder = nn.Sequential(
+            nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]//2),
+            nn.PReLU(),
+            nn.Dropout(self.dropout),
+            nn.Linear(self.config["d_encoder_h"]//2, self.config["d_model"]),
             nn.PReLU(),
             nn.Dropout(self.dropout)
         )
@@ -79,8 +88,15 @@ class ContextTransformer(nn.Module):
         return rel_pos_emb
 
     def forward(self, x, keyframe_pos, mask):
-        x = self.encoder(x)
-
+        if self.geo_embed=="base":
+            x = self.encoder(x)
+        elif self.geo_embed=="no":
+            seq_part = self.encoder(x[:,12:])
+            x = torch.cat([x[:,:12],seq_part],dim=1)
+        else:
+            seq_part = self.encoder(x[:,12:])
+            geo_part = self.geo_encoder(x[:,:12])
+            x = torch.cat([geo_part,seq_part],dim=1)
         x = x + self.keyframe_pos_layer(keyframe_pos)
 
         rel_pos_emb = self.get_rel_pos_emb(x.shape[-2], x.dtype, x.device)
