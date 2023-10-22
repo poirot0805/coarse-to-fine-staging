@@ -253,8 +253,10 @@ class BvhDataSet(Dataset):
                 temp_rotations = self.rotations[i][start_idx: end_idx]
                 add_pos=self.positions[i][end_idx-1:end_idx]
                 add_rot=self.rotations[i][end_idx-1:end_idx]
-                positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
-                rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
+                positions=torch.cat([temp_positions,torch.zeros([extend_length,*add_pos.shape[1:]],dtype=self.dtype,device=self.device)],dim=0)
+                rotations=torch.cat([temp_rotations,torch.zeros([extend_length,*add_rot.shape[1:]],dtype=self.dtype,device=self.device)],dim=0)
+                # positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
+                # rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
             # trends mask
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
