@@ -28,12 +28,9 @@ class ContextTransformer(nn.Module):
             nn.Dropout(self.dropout)
         )
         self.geo_encoder = nn.Sequential(
-            nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]//2),
+            nn.Linear(self.config["d_encoder_in"], self.config["d_model"]),
             nn.PReLU(),
             nn.Dropout(self.dropout),
-            nn.Linear(self.config["d_encoder_h"]//2, self.config["d_model"]),
-            nn.PReLU(),
-            nn.Dropout(self.dropout)
         )
 
         self.decoder = nn.Sequential(
