@@ -21,27 +21,27 @@ class ContextTransformer(nn.Module):
 
         self.encoder = nn.Sequential(
             nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]),
-            nn.PReLU(),
+            nn.GELU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.config["d_encoder_h"], self.config["d_model"]),
-            nn.PReLU(),
+            nn.GELU(),
             nn.Dropout(self.dropout)
         )
         self.geo_encoder = nn.Sequential(
             nn.Linear(self.config["d_encoder_in"], self.config["d_model"]),
-            nn.PReLU(),
+            nn.GELU(),
             nn.Dropout(self.dropout),
         )
 
         self.decoder = nn.Sequential(
             nn.Linear(self.config["d_model"], self.config["d_decoder_h"]),
-            nn.PReLU(),
+            nn.GELU(),
             nn.Linear(self.config["d_decoder_h"], self.config["d_out"])
         )
 
         self.rel_pos_layer = nn.Sequential(
             nn.Linear(1, self.config["d_head"]),
-            nn.PReLU(),
+            nn.GELU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.config["d_head"], self.config["d_head"]),
             nn.Dropout(self.dropout)
@@ -49,7 +49,7 @@ class ContextTransformer(nn.Module):
 
         self.keyframe_pos_layer = nn.Sequential(
             nn.Linear(2, self.config["d_model"]),
-            nn.PReLU(),
+            nn.GELU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.config["d_model"], self.config["d_model"]),
             nn.Dropout(self.dropout)
