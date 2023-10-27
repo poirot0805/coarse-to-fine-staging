@@ -18,30 +18,30 @@ class ContextTransformer(nn.Module):
         self.pre_lnorm = config["pre_lnorm"]
         self.n_layer = config["n_layer"]
         self.geo_embed = config["geo_embed"]
-
+        self.pos_encode_mode = config["pos_encode_mode"]
         self.encoder = nn.Sequential(
             nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]),
-            nn.GELU(),
+            nn.PReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.config["d_encoder_h"], self.config["d_model"]),
-            nn.GELU(),
+            nn.PReLU(),
             nn.Dropout(self.dropout)
         )
         self.geo_encoder = nn.Sequential(
             nn.Linear(self.config["d_encoder_in"], self.config["d_model"]),
-            nn.GELU(),
+            nn.PReLU(),
             nn.Dropout(self.dropout),
         )
 
         self.decoder = nn.Sequential(
             nn.Linear(self.config["d_model"], self.config["d_decoder_h"]),
-            nn.GELU(),
+            nn.PReLU(),
             nn.Linear(self.config["d_decoder_h"], self.config["d_out"])
         )
 
         self.rel_pos_layer = nn.Sequential(
             nn.Linear(1, self.config["d_head"]),
-            nn.GELU(),
+            nn.PReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.config["d_head"], self.config["d_head"]),
             nn.Dropout(self.dropout)
@@ -49,7 +49,7 @@ class ContextTransformer(nn.Module):
 
         self.keyframe_pos_layer = nn.Sequential(
             nn.Linear(2, self.config["d_model"]),
-            nn.GELU(),
+            nn.PReLU(),
             nn.Dropout(self.dropout),
             nn.Linear(self.config["d_model"], self.config["d_model"]),
             nn.Dropout(self.dropout)
@@ -60,14 +60,24 @@ class ContextTransformer(nn.Module):
         self.pff_layers = nn.ModuleList()
 
         for i in range(self.n_layer):
-            self.att_layers.append(
-                transformer.RelMultiHeadedAttention(
-                    self.config["n_head"], self.config["d_model"],
-                    self.config["d_head"], dropout=self.config["dropout"],
-                    pre_lnorm=self.config["pre_lnorm"],
-                    bias=self.config["atten_bias"]
+            if self.pos_encode_mode=="none" or self.pos_encode_mode=="kf-only":
+                self.att_layers.append(
+                    transformer.MultiHeadedAttention(
+                        self.config["n_head"], self.config["d_model"],
+                        self.config["d_head"], dropout=self.config["dropout"],
+                        pre_lnorm=self.config["pre_lnorm"],
+                        bias=self.config["atten_bias"]
+                    )
+                )  
+            else:# with rel
+                self.att_layers.append(
+                    transformer.RelMultiHeadedAttention(
+                        self.config["n_head"], self.config["d_model"],
+                        self.config["d_head"], dropout=self.config["dropout"],
+                        pre_lnorm=self.config["pre_lnorm"],
+                        bias=self.config["atten_bias"]
+                    )
                 )
-            )
 
             self.pff_layers.append(
                 transformer.PositionwiseFeedForward(
@@ -94,18 +104,17 @@ class ContextTransformer(nn.Module):
             seq_part = self.encoder(x[:,12:])
             geo_part = self.geo_encoder(x[:,:12])
             x = torch.cat([geo_part,seq_part],dim=1)
-        x = x + self.keyframe_pos_layer(keyframe_pos)
-
-        rel_pos_emb = self.get_rel_pos_emb(x.shape[-2], x.dtype, x.device)
-
-        #for i in range(int(self.n_layer)):
-        #    x = self.att_layers[i](x, rel_pos_emb, mask=mask)
-        #    x = self.pff_layers[i](x)
-        for i,(att_layer,pff_layer) in enumerate(zip(self.att_layers,self.pff_layers)):
-            x = att_layer(x, rel_pos_emb, mask=mask)
-            x = pff_layer(x)
-        #if self.pre_lnorm:
-        #    x = self.layer_norm(x)
+        if self.pos_encode_mode=="both" or self.pos_encode_mode=="kf-only":# with kf
+            x = x + self.keyframe_pos_layer(keyframe_pos)
+        if self.pos_encode_mode=="both" or self.pos_encode_mode=="rel-only":# with rel
+            rel_pos_emb = self.get_rel_pos_emb(x.shape[-2], x.dtype, x.device)
+            for i in range(int(self.n_layer)):
+                x = self.att_layers[i](x, rel_pos_emb, mask=mask)
+                x = self.pff_layers[i](x)
+        else:
+            for i in range(int(self.n_layer)):
+                x = self.att_layers[i](x, mask=mask)
+                x = self.pff_layers[i](x)
         x = self.layer_norm(x)
         x = self.decoder(x)
 
