@@ -768,7 +768,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             window_len, seq_slice, dtype, device)
         x = None
         if Data_Mask_MODE==0:
-            x_zscore * data_mask[...,:1]
+            x = x_zscore * data_mask[...,:1]
         else:
             x = torch.cat([
                 x_zscore * data_mask[...,:1],
@@ -776,6 +776,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             ], dim=-1)
         if Data_Mask_MODE==2:
             x[...,:12,-1]=2
+        
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
         x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice)
