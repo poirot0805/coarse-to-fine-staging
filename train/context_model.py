@@ -17,6 +17,7 @@ SEQNUM_GEO=12
 ATTENTION_MODE = "NOMASK"
 INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
+Data_Mask_MODE = 2  # //0: no data mask //1: normal //2: geo mask =2
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
     assert geo.shape[-1]==9
@@ -80,7 +81,7 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
         print("Train stats load from {}".format(stats_path))
     else:
         # calculate training stats
-        device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
         dataset, data_loader = train_utils.init_bvh_dataset(
             config, dataset_name, device, shuffle=True, dtype=torch.float64)
 
@@ -238,9 +239,11 @@ def train(config):
     global INIT_INTERP
     global SEQNUM_GEO
     global zscore_MODE
+    global Data_Mask_MODE
     ATTENTION_MODE = config["train"]["attention_mode"]
     INIT_INTERP = config["train"]["init_interp"]
     zscore_MODE = config["train"]["zscore_MODE"]    # normal/none/seq
+    Data_Mask_MODE = config["train"]["data_mask_set"] 
     print(ATTENTION_MODE,INIT_INTERP,zscore_MODE)
     indices = config["indices"]
     info_interval = config["visdom"]["interval"]
@@ -252,7 +255,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -381,13 +384,16 @@ def train(config):
                 x_gt_zscore = (x_gt - mean) / std
             elif zscore_MODE=="no":
                 x_gt_zscore = x_gt
-
-
-            x = torch.cat([
-                x_gt_zscore * data_mask[...,:1],
-                data_mask.expand(*x_gt_zscore.shape[:-1], data_mask.shape[-1])
-            ], dim=-1)
-
+            x = None
+            if Data_Mask_MODE==0:
+                x = x_gt_zscore * data_mask[...,:1]
+            else:
+                x = torch.cat([
+                    x_gt_zscore * data_mask[...,:1],
+                    data_mask.expand(*x_gt_zscore.shape[:-1], data_mask.shape[-1])
+                ], dim=-1)
+            if Data_Mask_MODE==2:
+                x[...,:12,-1]=2
             x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice, r_slice)
 
             # calculate model output y
@@ -709,6 +715,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         with same shape as input.
     """
     global zscore_MODE
+    global Data_Mask_MODE
     dtype = positions.dtype
     device = positions.device
     window_len = positions.shape[-3]+SEQNUM_GEO if geo is not None else positions.shape[-3]
@@ -757,12 +764,16 @@ def evaluate(model, positions, rotations, seq_slice, indices,
 
         keyframe_pos_idx = get_keyframe_pos_indices(
             window_len, seq_slice, dtype, device)
-
-        x = torch.cat([
-            x_zscore * data_mask[...,:1],
-            data_mask.expand(*x_zscore.shape[:-1], data_mask.shape[-1])
-        ], dim=-1)
-
+        x = None
+        if Data_Mask_MODE==0:
+            x_zscore * data_mask[...,:1]
+        else:
+            x = torch.cat([
+                x_zscore * data_mask[...,:1],
+                data_mask.expand(*x_zscore.shape[:-1], data_mask.shape[-1])
+            ], dim=-1)
+        if Data_Mask_MODE==2:
+            x[...,:12,-1]=2
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
         x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice)
