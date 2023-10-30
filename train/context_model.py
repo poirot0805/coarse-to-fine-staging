@@ -384,7 +384,7 @@ def train(config):
 
 
             x = torch.cat([
-                x_gt_zscore * data_mask,
+                x_gt_zscore * data_mask[...,:1],
                 data_mask.expand(*x_gt_zscore.shape[:-1], data_mask.shape[-1])
             ], dim=-1)
 
@@ -759,7 +759,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             window_len, seq_slice, dtype, device)
 
         x = torch.cat([
-            x_zscore * data_mask,
+            x_zscore * data_mask[...,:1],
             data_mask.expand(*x_zscore.shape[:-1], data_mask.shape[-1])
         ], dim=-1)
 
