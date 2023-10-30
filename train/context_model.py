@@ -14,7 +14,7 @@ from motion_inbetween.train import rmi
 from motion_inbetween.train import utils as train_utils
 
 SEQNUM_GEO=12
-ATTENTION_MODE = "NOMASK"
+ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
 INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
 Data_Mask_MODE = 2  # //0: no data mask //1: normal //2: geo mask =2
@@ -150,9 +150,11 @@ def get_attention_mask(window_len, context_len, target_idx, device,
         atten_mask[:, :context_len] = False
         atten_mask[:, midway_targets] = False
     
-    # old-2:全部不遮罩
+    # old-2:全部不遮罩,常用模式
     if ATTENTION_MODE=="NOMASK":
         atten_mask[:, :target_idx + 1] = False
+    if ATTENTION_MODE=="SQUARE":
+        atten_mask[:target_idx + 1, :target_idx + 1] = False
     # assert context_len==13
     atten_mask = atten_mask.unsqueeze(0)
 
