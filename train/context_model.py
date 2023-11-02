@@ -402,7 +402,7 @@ def train(config):
             optimizer.zero_grad()
             model.train()
 
-            model_out = model(x, keyframe_pos_idx, mask=atten_mask)
+            model_out = model(x, keyframe_pos_idx)#model(x, keyframe_pos_idx, mask=atten_mask)
             if config["train"]["trends_loss"]:
                 c_out = trends.clone().detach()
                 c_out[..., seq_slice, :] = torch.sigmoid(
@@ -782,7 +782,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice)
 
         # calculate model output y
-        model_out = model(x, keyframe_pos_idx, mask=atten_mask)
+        model_out = model(x, keyframe_pos_idx)#model(x, keyframe_pos_idx, mask=atten_mask)
         y = x_zscore.clone().detach()
         y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
 

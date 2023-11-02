@@ -217,8 +217,7 @@ class RelMultiHeadedAttention(nn.Module):
 
         self.layer_norm = nn.LayerNorm(d_model)
 
-    def skew(self, qpos, mem_len:int):
-
+    def skew(self, qpos, mem_len):
         padding_shape = list(qpos.shape)
         padding_shape[-1] = 1
         padding = torch.full(padding_shape, float("-inf"), device=qpos.device)
@@ -226,7 +225,7 @@ class RelMultiHeadedAttention(nn.Module):
         relpos = torch.cat([qpos, padding], dim=-1)
         relpos = relpos.flatten(start_dim=-2)
         relpos = relpos[..., :qpos.shape[-1] * qpos.shape[-2]]
-        relpos = relpos.reshape(qpos.shape)
+        relpos = relpos.reshape(*qpos.shape)
 
         q_len = qpos.shape[-2]
         k_len = int((qpos.shape[-1] + 1) / 2)
@@ -241,7 +240,8 @@ class RelMultiHeadedAttention(nn.Module):
 
         return relpos
 
-    def forward(self, hidden, pos_emb, mask):
+    def forward(self, hidden, pos_emb, memory=None, mask=None,
+                extra_atten_score=None):
         """
         Args:
             hidden (Tensor): Input embedding or hidden state of previous layer.
@@ -257,20 +257,17 @@ class RelMultiHeadedAttention(nn.Module):
                 attention score, otherwise False. Defaults to None.
                 Shape: (seq, seq+mem_len).
         """
-        # if memory is None:
-        #     combined = hidden
-        #     mem_len = 0
-        # else:
-        #     combined = torch.cat([memory, hidden], dim=1)
-        #     mem_len = memory.shape[1]
-        combined = hidden
-        mem_len = 0
+        if memory is None:
+            combined = hidden
+            mem_len = 0
+        else:
+            combined = torch.cat([memory, hidden], dim=1)
+            mem_len = memory.shape[1]
 
-        # if self.pre_lnorm:
-        #     hidden = self.layer_norm(hidden)
-        #     combined = self.layer_norm(combined)
-        hidden = self.layer_norm(hidden)
-        combined = self.layer_norm(combined)
+        if self.pre_lnorm:
+            hidden = self.layer_norm(hidden)
+            combined = self.layer_norm(combined)
+
         # shape: (batch, q/k/v_len, dim)
         q = self.q_linear(hidden)
         k = self.k_linear(combined)
@@ -301,13 +298,12 @@ class RelMultiHeadedAttention(nn.Module):
         atten_score = atten_score + self.skew(qpos, mem_len)
         atten_score = atten_score * self.atten_scale
 
-        # if extra_atten_score is not None:
-        #     atten_score = atten_score + extra_atten_score
+        if extra_atten_score is not None:
+            atten_score = atten_score + extra_atten_score
 
-        # if mask is not None:
-        #     # apply attention mask
-        #     atten_score = atten_score.masked_fill(mask, float("-inf"))
-        atten_score = atten_score.masked_fill(mask, float("-inf"))
+        if mask is not None:
+            # apply attention mask
+            atten_score = atten_score.masked_fill(mask, float("-inf"))
         atten_score = atten_score.softmax(dim=-1)
         atten_score = self.atten_dropout_layer(atten_score)
 
@@ -319,8 +315,7 @@ class RelMultiHeadedAttention(nn.Module):
         # linear projection
         output = self.droput_layer(self.out_linear(atten_vec))
 
-        # if self.pre_lnorm:
-        #     return hidden + output
-        # else:
-        #     return self.layer_norm(hidden + output)
-        return hidden + output
+        if self.pre_lnorm:
+            return hidden + output
+        else:
+            return self.layer_norm(hidden + output)

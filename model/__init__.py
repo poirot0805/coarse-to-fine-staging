@@ -78,19 +78,16 @@ class ContextTransformer(nn.Module):
         rel_pos_emb = self.rel_pos_layer(pos_idx)
         return rel_pos_emb
 
-    def forward(self, x, keyframe_pos, mask):
+    def forward(self, x, keyframe_pos, mask=None):
         x = self.encoder(x)
 
         x = x + self.keyframe_pos_layer(keyframe_pos)
 
         rel_pos_emb = self.get_rel_pos_emb(x.shape[-2], x.dtype, x.device)
 
-        #for i in range(int(self.n_layer)):
-        #    x = self.att_layers[i](x, rel_pos_emb, mask=mask)
-        #    x = self.pff_layers[i](x)
-        for i,(att_layer,pff_layer) in enumerate(zip(self.att_layers,self.pff_layers)):
-            x = att_layer(x, rel_pos_emb, mask=mask)
-            x = pff_layer(x)
+        for i in range(self.n_layer):
+            x = self.att_layers[i](x, rel_pos_emb, mask=mask)
+            x = self.pff_layers[i](x)
         #if self.pre_lnorm:
         #    x = self.layer_norm(x)
         x = self.layer_norm(x)
