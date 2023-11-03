@@ -47,7 +47,7 @@ class AlibiPositionalBias(nn.Module):
             num_heads_unalibied = h - bias.shape[-3]
             bias = F.pad(bias, (0, 0, 0, 0, 0, num_heads_unalibied))
             self.register_buffer('bias', bias, persistent = False)
-        return qk_dots + self.bias
+        return qk_dots + self.bias[..., :j]
 
 class LearnedAlibiPositionalBias(AlibiPositionalBias):
     def __init__(self, heads):
