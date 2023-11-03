@@ -3,7 +3,7 @@ import torch.nn as nn
 
 from motion_inbetween.model import transformer
 
-
+# add Alibi version
 class ContextTransformer(nn.Module):
     def __init__(self, config):
         super(ContextTransformer, self).__init__()
@@ -13,11 +13,11 @@ class ContextTransformer(nn.Module):
         self.constrained_slices = [
             slice(*i) for i in config["constrained_slices"]
         ]
-
+        self.add_kf = config["add_kf"]
         self.dropout = config["dropout"]
         self.pre_lnorm = config["pre_lnorm"]
         self.n_layer = config["n_layer"]
-
+        
         self.encoder = nn.Sequential(
             nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]),
             nn.PReLU(),
@@ -33,13 +33,13 @@ class ContextTransformer(nn.Module):
             nn.Linear(self.config["d_decoder_h"], self.config["d_out"])
         )
 
-        self.rel_pos_layer = nn.Sequential(
-            nn.Linear(1, self.config["d_head"]),
-            nn.PReLU(),
-            nn.Dropout(self.dropout),
-            nn.Linear(self.config["d_head"], self.config["d_head"]),
-            nn.Dropout(self.dropout)
-        )
+        # self.rel_pos_layer = nn.Sequential(
+        #     nn.Linear(1, self.config["d_head"]),
+        #     nn.PReLU(),
+        #     nn.Dropout(self.dropout),
+        #     nn.Linear(self.config["d_head"], self.config["d_head"]),
+        #     nn.Dropout(self.dropout)
+        # )
 
         self.keyframe_pos_layer = nn.Sequential(
             nn.Linear(2, self.config["d_model"]),
@@ -55,7 +55,7 @@ class ContextTransformer(nn.Module):
 
         for i in range(self.n_layer):
             self.att_layers.append(
-                transformer.RelMultiHeadedAttention(
+                transformer.AlibiMultiHeadedAttention(
                     self.config["n_head"], self.config["d_model"],
                     self.config["d_head"], dropout=self.config["dropout"],
                     pre_lnorm=self.config["pre_lnorm"],
@@ -71,22 +71,22 @@ class ContextTransformer(nn.Module):
                 )
             )
 
-    def get_rel_pos_emb(self, window_len:int, dtype:torch.dtype, device:torch.device):
-        pos_idx = torch.arange(-window_len + 1, window_len,
-                               dtype=dtype, device=device)
-        pos_idx = pos_idx[None, :, None]        # (1, seq, 1)
-        rel_pos_emb = self.rel_pos_layer(pos_idx)
-        return rel_pos_emb
+    # def get_rel_pos_emb(self, window_len:int, dtype:torch.dtype, device:torch.device):
+    #     pos_idx = torch.arange(-window_len + 1, window_len,
+    #                            dtype=dtype, device=device)
+    #     pos_idx = pos_idx[None, :, None]        # (1, seq, 1)
+    #     rel_pos_emb = self.rel_pos_layer(pos_idx)
+    #     return rel_pos_emb
 
     def forward(self, x, keyframe_pos, mask=None):
         x = self.encoder(x)
+        if self.add_kf:
+            x = x + self.keyframe_pos_layer(keyframe_pos)
 
-        x = x + self.keyframe_pos_layer(keyframe_pos)
-
-        rel_pos_emb = self.get_rel_pos_emb(x.shape[-2], x.dtype, x.device)
+        # rel_pos_emb = self.get_rel_pos_emb(x.shape[-2], x.dtype, x.device)
 
         for i in range(self.n_layer):
-            x = self.att_layers[i](x, rel_pos_emb, mask=mask)
+            x = self.att_layers[i](x, mask=mask)
             x = self.pff_layers[i](x)
         #if self.pre_lnorm:
         #    x = self.layer_norm(x)
