@@ -17,7 +17,7 @@ SEQNUM_GEO=12
 ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
 INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
-Data_Mask_MODE = 2  # //0: no data mask //1: normal //2: geo mask =2
+Data_Mask_MODE = 1  # //0: no data mask //1: normal //2: geo mask =2
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
     assert geo.shape[-1]==9
@@ -81,7 +81,7 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
         print("Train stats load from {}".format(stats_path))
     else:
         # calculate training stats
-        device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         dataset, data_loader = train_utils.init_bvh_dataset(
             config, dataset_name, device, shuffle=True, dtype=torch.float64)
 
@@ -257,7 +257,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -402,7 +402,7 @@ def train(config):
             optimizer.zero_grad()
             model.train()
 
-            model_out = model(x, keyframe_pos_idx)#model(x, keyframe_pos_idx, mask=atten_mask)
+            model_out = model(x, keyframe_pos_idx, mask=atten_mask)
             if config["train"]["trends_loss"]:
                 c_out = trends.clone().detach()
                 c_out[..., seq_slice, :] = torch.sigmoid(
@@ -782,7 +782,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice)
 
         # calculate model output y
-        model_out = model(x, keyframe_pos_idx)#model(x, keyframe_pos_idx, mask=atten_mask)
+        model_out = model(x, keyframe_pos_idx, mask=atten_mask)
         y = x_zscore.clone().detach()
         y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
 

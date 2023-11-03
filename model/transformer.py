@@ -1,9 +1,11 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
-
+def exists(val):
+    return val is not None
 class AlibiPositionalBias(nn.Module):
     def __init__(self, heads, **kwargs):
         super().__init__()
