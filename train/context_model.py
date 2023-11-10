@@ -81,7 +81,7 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
         print("Train stats load from {}".format(stats_path))
     else:
         # calculate training stats
-        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
         dataset, data_loader = train_utils.init_bvh_dataset(
             config, dataset_name, device, shuffle=True, dtype=torch.float64)
 
@@ -257,7 +257,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -346,12 +346,14 @@ def train(config):
 
             # randomize transition length
             # trans_len = random.randint(min_trans, max_trans)# random.choice([random.randint(min_trans, max_trans),min(frame_nums)-2])
-            max_trans_ = random.choice([max_trans,min(frame_nums)-2])
-            trans_len = max_trans_
-            if min_trans>= max_trans_:
-                trans_len = max_trans_
-            else:
-                trans_len = random.randint(min_trans, max_trans_)
+            
+            # max_trans_ = random.choice([max_trans,min(frame_nums)-2])
+            # trans_len = max_trans_
+            # if min_trans>= max_trans_:
+            #     trans_len = max_trans_
+            # else:
+            #     trans_len = random.randint(min_trans, max_trans_)
+            trans_len = random.randint(min(frame_nums)-2, max_trans)
             target_idx = context_len + trans_len
             seq_slice = slice(context_len, target_idx)
 
