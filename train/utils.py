@@ -85,7 +85,7 @@ def get_val_datasets(config, device,trans_list,shuffle=False, dtype=torch.float3
     dataset_loaders = []
     datasets = []
     for trans in trans_list:
-        dataset = loader.ValToothDataSet(bvh_folder=r"..\\datasets\\teeth10k\\val",  window=trans+2, offset=1,
+        dataset = loader.ValToothDataSet(bvh_folder=config["datasets"]["benchmark"]["bvh_folder"],  window=trans+2, offset=1,
                  start_frame=0, fill_mode="vacant-mean",device=device, dtype=dtype,add_geo=add_geo)
         print("{} clips in val-dataset.".format(len(dataset)))
         data_loader = DataLoader(dataset, batch_size=config["train"]["batch_size"],shuffle=shuffle)

@@ -562,7 +562,7 @@ def train(config):
                     for i in range(len(val_dataloaders)):
                             ds_name = "val"
                             ds_loader = val_dataloaders[i]
-                            trans = ds_loader.dataset.window
+                            trans = ds_loader.dataset.window-2
                             gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss = eval_on_dataset(
                                 config, ds_loader, model, trans)
 
@@ -578,8 +578,8 @@ def train(config):
                                 [ds_name, "val_s_{}".format(trans),
                                  val_smoothloss], 
                             ])
-                            print("{}:\ngpos: {:6f}, gquat: {:6f}, "
-                                  "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}".format(ds_name, gpos_loss,
+                            print("{}-{}:\ngpos: {:6f}, gquat: {:6f}, "
+                                  "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}".format(ds_name, trans, gpos_loss,
                                                         gquat_loss, npss_loss,val_ploss,val_smoothloss))
                         
                 train_utils.to_visdom(vis, info_idx, contents)
@@ -674,8 +674,8 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         smooth_loss = train_utils.cal_smooth_loss(pos_new, seq_slice)   # FIXME:rot要不要加进去
         p_loss = train_utils.cal_p_loss(positions, pos_new, seq_slice)
 
-        p_loss_avg.append(p_loss.cpu().numpy())
-        smooth_loss_avg.append(smooth_loss.cpu().numpy())
+        p_loss_avg.append(p_loss.item())
+        smooth_loss_avg.append(smooth_loss.item())
         
         gpos_loss.append(gpos_batch_loss)
         gquat_loss.append(gquat_batch_loss)
@@ -691,8 +691,8 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     npss_weights = npss_weights / np.sum(npss_weights)      # (batch, dim)
     npss_loss = np.sum(npss_loss * npss_weights, axis=-1)   # (batch, )
 
-    p_loss_avg = np.concatenate(p_loss_avg,axis=0)
-    smooth_loss_avg = np.concatenate(smooth_loss_avg,axis=0)
+    p_loss_avg = np.array(p_loss_avg)
+    smooth_loss_avg = np.array(smooth_loss_avg)
     if debug:
         total_loss = gpos_loss + gquat_loss + npss_loss
         loss_data = list(zip(
