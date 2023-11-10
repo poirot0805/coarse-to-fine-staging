@@ -267,6 +267,7 @@ def train(config):
     bench_dataset_names, _, bench_data_loaders = \
         train_utils.get_benchmark_datasets(config, device, shuffle=False,add_geo=config["train"]["add_geo"])   # FIXED:验证集载入
 
+    _,val_dataloaders = train_utils.get_val_datasets(config,device,eval_trans,shuffle=False, dtype=dataset.dtype,add_geo=config["train"]["add_geo"])
     # visualization
     vis, info_idx = train_utils.init_visdom(config)
 
@@ -524,7 +525,7 @@ def train(config):
                             ds_name = bench_dataset_names[i]
                             ds_loader = bench_data_loaders[i]
 
-                            gpos_loss, gquat_loss, npss_loss = eval_on_dataset(
+                            gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss = eval_on_dataset(
                                 config, ds_loader, model, trans)
 
                             contents.extend([
@@ -534,10 +535,14 @@ def train(config):
                                  gquat_loss],
                                 [ds_name, "npss_{}".format(trans),
                                  npss_loss],
+                                [ds_name, "val_p_{}".format(trans),
+                                 val_ploss],
+                                [ds_name, "val_s_{}".format(trans),
+                                 val_smoothloss], 
                             ])
                             print("{}:\ngpos: {:6f}, gquat: {:6f}, "
-                                  "npss: {:.6f}".format(ds_name, gpos_loss,
-                                                        gquat_loss, npss_loss))
+                                  "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}".format(ds_name, gpos_loss,
+                                                        gquat_loss, npss_loss,val_ploss,val_smoothloss))
 
                             if ds_name == "benchmark":
                                 # After iterations, benchmark_loss will be the
@@ -553,7 +558,30 @@ def train(config):
                         train_utils.save_checkpoint(
                             config, model, epoch, iteration,
                             optimizer, scheduler, suffix=".min")
+                if iteration % (eval_interval*10)==0:
+                    for i in range(len(val_dataloaders)):
+                            ds_name = "val"
+                            ds_loader = val_dataloaders[i]
+                            trans = ds_loader.dataset.window
+                            gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss = eval_on_dataset(
+                                config, ds_loader, model, trans)
 
+                            contents.extend([
+                                [ds_name, "gpos_{}".format(trans),
+                                 gpos_loss],
+                                [ds_name, "gquat_{}".format(trans),
+                                 gquat_loss],
+                                [ds_name, "npss_{}".format(trans),
+                                 npss_loss],
+                                [ds_name, "val_p_{}".format(trans),
+                                 val_ploss],
+                                [ds_name, "val_s_{}".format(trans),
+                                 val_smoothloss], 
+                            ])
+                            print("{}:\ngpos: {:6f}, gquat: {:6f}, "
+                                  "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}".format(ds_name, gpos_loss,
+                                                        gquat_loss, npss_loss,val_ploss,val_smoothloss))
+                        
                 train_utils.to_visdom(vis, info_idx, contents)
                 r_loss_avg = 0
                 p_loss_avg = 0
@@ -564,7 +592,7 @@ def train(config):
                 info_idx += 1
 
             iteration += 1
-
+            
         epoch += 1
 
 
@@ -598,7 +626,9 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     gquat_loss = []
     npss_loss = []
     npss_weights = []
-    
+
+    p_loss_avg = []
+    smooth_loss_avg = []
     add_geo_FLAG = config["train"]["add_geo"]
     if add_geo_FLAG==False:
         assert SEQNUM_GEO==0
@@ -639,7 +669,14 @@ def eval_on_dataset(config, data_loader, model, trans_len,
                 positions, rotations, pos_new, rot_new, None,
                 context_len, target_idx, mean_rmi, std_rmi
         )   # FIXED:rmi定义的损失计算
+            
 
+        smooth_loss = train_utils.cal_smooth_loss(pos_new, seq_slice)   # FIXME:rot要不要加进去
+        p_loss = train_utils.cal_p_loss(positions, pos_new, seq_slice)
+
+        p_loss_avg.append(p_loss.cpu().numpy())
+        smooth_loss_avg.append(smooth_loss.cpu().numpy())
+        
         gpos_loss.append(gpos_batch_loss)
         gquat_loss.append(gquat_batch_loss)
         npss_loss.append(npss_batch_loss)
@@ -654,6 +691,8 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     npss_weights = npss_weights / np.sum(npss_weights)      # (batch, dim)
     npss_loss = np.sum(npss_loss * npss_weights, axis=-1)   # (batch, )
 
+    p_loss_avg = np.concatenate(p_loss_avg,axis=0)
+    smooth_loss_avg = np.concatenate(smooth_loss_avg,axis=0)
     if debug:
         total_loss = gpos_loss + gquat_loss + npss_loss
         loss_data = list(zip(
@@ -668,7 +707,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
         return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(), loss_data
     else:
-        return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum()
+        return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(),p_loss_avg.mean(),smooth_loss_avg.mean()
 
 
 def evaluate(model, positions, rotations, seq_slice, indices,

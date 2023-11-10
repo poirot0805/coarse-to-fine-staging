@@ -81,7 +81,18 @@ def get_benchmark_datasets(config, device,
             dataset_loaders.append(dl)
     return dataset_names, datasets, dataset_loaders
 
-
+def get_val_datasets(config, device,trans_list,shuffle=False, dtype=torch.float32,add_geo=False):
+    dataset_loaders = []
+    datasets = []
+    for trans in trans_list:
+        dataset = loader.ValToothDataSet(bvh_folder=r"..\\datasets\\teeth10k\\val",  window=trans+2, offset=1,
+                 start_frame=0, fill_mode="vacant-mean",device=device, dtype=dtype,add_geo=add_geo)
+        print("{} clips in val-dataset.".format(len(dataset)))
+        data_loader = DataLoader(dataset, batch_size=config["train"]["batch_size"],shuffle=shuffle)
+        datasets.append(dataset)
+        dataset_loaders.append(data_loader)
+    return datasets, dataset_loaders
+    
 def get_noam_lr_scheduler(config, optimizer):
     warm_iters = config["train"]["lr_warmup_iterations"]
 
