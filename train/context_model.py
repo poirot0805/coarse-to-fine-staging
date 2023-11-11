@@ -3,7 +3,7 @@ import pickle
 import random
 from turtle import pos
 import numpy as np
-
+import math
 import torch
 from torch.optim import Adam
 
@@ -353,7 +353,10 @@ def train(config):
             #     trans_len = max_trans_
             # else:
             #     trans_len = random.randint(min_trans, max_trans_)
-            trans_len = random.randint(min(frame_nums)-2, max_trans)
+            min_trans = min(frame_nums)-2
+            prob =random.uniform(0,1)
+            trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
+            trans_len = max_trans if trans_len>max_trans else trans_len
             target_idx = context_len + trans_len
             seq_slice = slice(context_len, target_idx)
 
