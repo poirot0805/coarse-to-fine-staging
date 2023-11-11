@@ -7,8 +7,8 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LambdaLR
 import sys
 sys.path.append(r"/home/mjy/1126Teeth/packages")
-from motion_inbetween.data import loader
-from motion_inbetween.data import utils_torch as data_utils
+from motion_inbetween_normal.data import loader
+from motion_inbetween_normal.data import utils_torch as data_utils
 
 
 def load_checkpoint(config, model, optimizer=None, scheduler=None, suffix=""):

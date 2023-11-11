@@ -7,11 +7,11 @@ import math
 import torch
 from torch.optim import Adam
 
-from motion_inbetween import benchmark
-from motion_inbetween.model import ContextTransformer
-from motion_inbetween.data import utils_torch as data_utils
-from motion_inbetween.train import rmi
-from motion_inbetween.train import utils as train_utils
+from motion_inbetween_normal import benchmark
+from motion_inbetween_normal.model import ContextTransformer
+from motion_inbetween_normal.data import utils_torch as data_utils
+from motion_inbetween_normal.train import rmi
+from motion_inbetween_normal.train import utils as train_utils
 
 SEQNUM_GEO=12
 ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
@@ -313,7 +313,7 @@ def train(config):
     f_loss_avg = 0
 
     min_benchmark_loss = float("inf")
-    
+    random_trans_mode = config["train"]["random_trans_mode"]
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
             (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data    # FIXME:返回类型：需要pos,rot[9D]
@@ -346,17 +346,19 @@ def train(config):
 
             # randomize transition length
             # trans_len = random.randint(min_trans, max_trans)# random.choice([random.randint(min_trans, max_trans),min(frame_nums)-2])
-            
-            # max_trans_ = random.choice([max_trans,min(frame_nums)-2])
-            # trans_len = max_trans_
-            # if min_trans>= max_trans_:
-            #     trans_len = max_trans_
-            # else:
-            #     trans_len = random.randint(min_trans, max_trans_)
-            min_trans = min(frame_nums)-2
-            prob =random.uniform(0,1)
-            trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
-            trans_len = max_trans if trans_len>max_trans else trans_len
+            trans_len = max_trans
+            if random_trans_mode !="sqrt":
+                max_trans_ = random.choice([max_trans,min(frame_nums)-2])
+                trans_len = max_trans_
+                if min_trans>= max_trans_:
+                    trans_len = max_trans_
+                else:
+                    trans_len = random.randint(min_trans, max_trans_)
+            else:
+                min_trans = min(frame_nums)-2
+                prob =random.uniform(0,1)
+                trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
+                trans_len = max_trans if trans_len>max_trans else trans_len
             target_idx = context_len + trans_len
             seq_slice = slice(context_len, target_idx)
 
