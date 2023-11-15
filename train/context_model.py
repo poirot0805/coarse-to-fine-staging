@@ -561,6 +561,7 @@ def train(config):
 
                     if min_benchmark_loss > benchmark_loss:
                         min_benchmark_loss = benchmark_loss
+                        contents.extend([["min_bench", "loss",min_benchmark_loss]])
                         # save min loss checkpoint
                         train_utils.save_checkpoint(
                             config, model, epoch, iteration,
