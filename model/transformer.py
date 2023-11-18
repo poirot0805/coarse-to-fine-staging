@@ -25,7 +25,7 @@ class AlibiPositionalBias(nn.Module):
     def get_bias(self, i, j, device):
         i_arange = torch.arange(256, device = device)
         j_arange = torch.arange(256, device = device)
-        bias = -torch.abs(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
+        bias = -(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
         return bias
 
     @staticmethod
@@ -51,10 +51,11 @@ class AlibiPositionalBias(nn.Module):
             bias = self.get_bias(i, j, device)
             bias = bias * self.slopes
             bias = bias.repeat(1,2,1,1)
+            print(bias.shape)
             num_heads_unalibied = h - bias.shape[-3]
             bias = F.pad(bias, (0, 0, 0, 0, 0, num_heads_unalibied))
-            bias = bias + self.nonsym_mask.to(device)
-            print(bias)
+            # self.nonsym_mask =  self.nonsym_mask.to(device)
+            
             self.register_buffer('bias', bias, persistent = False)
         return qk_dots + self.bias[..., :i,:j]
 
