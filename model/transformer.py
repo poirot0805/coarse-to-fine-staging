@@ -6,14 +6,21 @@ from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 def exists(val):
     return val is not None
+def fill_with_neg_inf(t):
+    """FP16-compatible function that fills a tensor with -inf."""
+    return t.float().fill_(float("-inf")).type_as(t)   
 class AlibiPositionalBias(nn.Module):
     def __init__(self, heads, **kwargs):
         super().__init__()
         self.heads = heads
-        slopes = torch.Tensor(self._get_slopes(heads))
+        slopes = torch.Tensor(self._get_slopes(heads//2))
         slopes = rearrange(slopes, 'h -> h 1 1')
         self.register_buffer('slopes', slopes, persistent = False)
         self.register_buffer('bias', None, persistent = False)
+    
+        self._future_mask_right = torch.triu(fill_with_neg_inf(torch.zeros([256,256])), 1).unsqueeze(0).repeat(heads//2, 1, 1)
+        self._future_mask_left = torch.tril(fill_with_neg_inf(torch.zeros([256,256])), -1).unsqueeze(0).repeat(heads//2, 1, 1)
+        self.nonsym_mask = torch.cat((self._future_mask_right, self._future_mask_left), dim = 0).unsqueeze(0)
     
     def get_bias(self, i, j, device):
         i_arange = torch.arange(256, device = device)
@@ -43,9 +50,11 @@ class AlibiPositionalBias(nn.Module):
         if not exists(self.bias):
             bias = self.get_bias(i, j, device)
             bias = bias * self.slopes
-
+            bias = bias.repeat(1,2,1,1)
             num_heads_unalibied = h - bias.shape[-3]
             bias = F.pad(bias, (0, 0, 0, 0, 0, num_heads_unalibied))
+            bias = bias + self.nonsym_mask.to(device)
+            print(bias)
             self.register_buffer('bias', bias, persistent = False)
         return qk_dots + self.bias[..., :i,:j]
 
