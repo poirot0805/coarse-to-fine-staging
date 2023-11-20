@@ -25,7 +25,7 @@ class AlibiPositionalBias(nn.Module):
     def get_bias(self, i, j, device):
         i_arange = torch.arange(256, device = device)
         j_arange = torch.arange(256, device = device)
-        bias = -(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
+        bias = -torch.abs(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
         bias[...,12:,:12]=bias[...,12:13,:12] # new
         bias[...,:12,12:]=bias[...,:12,12:13]   # new
         #bias = torch.exp(-torch.square(bias) / (2 * self.sigma ** 2))   # new
@@ -84,6 +84,34 @@ class LearnedAlibiPositionalBias(AlibiPositionalBias):
 
         slopes = get_slopes(self.learned_logslopes)
         bias = bias * slopes
+
+        return qk_dots + bias
+class BiAlibiPositionalBias(AlibiPositionalBias):
+    def __init__(self, heads):
+        super().__init__(heads)
+        log_slopes = torch.log(self.slopes)
+        self.learned_logslopes_left = nn.Parameter(log_slopes)  #(h,1,1)
+        self.learned_logslopes_right = nn.Parameter(log_slopes)
+
+    def forward(self, qk_dots):
+        h, i, j, device = *qk_dots.shape[-3:], qk_dots.device
+
+        def get_slopes(param):
+            return torch.sigmoid(param)
+
+        if exists(self.bias) and self.bias.shape[-1] >= j:
+            hbias = self.bias[..., :i, :j]
+        else:
+            bias = self.get_bias(i, j, device)
+            self.register_buffer('bias', bias, persistent = False)
+            
+            hbias = bias[..., :i, :j]
+
+        slopes_left = get_slopes(self.learned_logslopes_left)
+        slopes_right = get_slopes(self.learned_logslopes_right)
+        alibi_left = hbias*slopes_left
+        alibi_right = hbias*slopes_right
+        alibi_bias = torch.triu(alibi_right) + torch.tril(alibi_left)
 
         return qk_dots + bias
 class SinusoidPositionalEncoding(nn.Module):
@@ -198,7 +226,7 @@ class AlibiMultiHeadedAttention(nn.Module):
         self.atten_dropout_layer = nn.Dropout(dropout)
 
         self.layer_norm = nn.LayerNorm(d_model)
-        self.alibi_pos = AlibiPositionalBias(n_head)
+        self.alibi_pos = BiAlibiPositionalBias(n_head)
 
     def forward(self, hidden, memory=None, mask=None):
         """
