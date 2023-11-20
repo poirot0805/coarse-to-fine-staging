@@ -156,7 +156,13 @@ def get_attention_mask(window_len, context_len, target_idx, device,
     if ATTENTION_MODE=="SQUARE":
         atten_mask[:target_idx + 1, :target_idx + 1] = False
     # assert context_len==13
-    atten_mask = atten_mask.unsqueeze(0)
+    # # for eval
+    # indices = torch.arange(window_len)
+    # mask = torch.abs(indices.unsqueeze(1) - indices) > 51
+    # mask[:,:12]=False
+    # mask[:12,:]=False
+    # atten_mask = mask.to(device)
+    # atten_mask = atten_mask.unsqueeze(0)
 
     # (1, seq, seq)
     return atten_mask

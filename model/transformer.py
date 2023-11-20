@@ -26,9 +26,9 @@ class AlibiPositionalBias(nn.Module):
         i_arange = torch.arange(256, device = device)
         j_arange = torch.arange(256, device = device)
         bias = -(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
-        bias[...,:12]=0 # new
-        bias[...,:12,:]=0   # new
-        bias = torch.exp(-torch.square(bias) / (2 * self.sigma ** 2))   # new
+        bias[...,12:,:12]=bias[...,12:13,:12] # new
+        bias[...,:12,12:]=bias[...,:12,12:13]   # new
+        #bias = torch.exp(-torch.square(bias) / (2 * self.sigma ** 2))   # new
 
         return bias
 
