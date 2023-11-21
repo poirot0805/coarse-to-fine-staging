@@ -217,24 +217,23 @@ def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice=None)
                 x[..., end_slice, p_slice],
                 end_idx - start_idx - 1
         )
-    if INIT_INTERP=="POS-ROT":
-        for i in range(len(constrained_frames) - 1):
-            start_idx = constrained_frames[i]
-            end_idx = constrained_frames[i + 1]
-            start_slice = slice(start_idx, start_idx + 1)
-            end_slice = slice(end_idx, end_idx + 1)
-            inbetween_slice = slice(start_idx + 1, end_idx)
-
-            x[..., inbetween_slice, r_slice] = \
-                benchmark.get_linear_interpolation(
-                    x[..., start_slice, r_slice],
-                    x[..., end_slice, r_slice],
-                    end_idx - start_idx - 1
-            )
-        # TODO:interp on rotations
 
     return x
 
+def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
+    constrained_frames = [seq_slice.start - 1, seq_slice.stop]
+    constrained_frames.extend(midway_targets)
+    constrained_frames.sort()
+    for i in range(len(constrained_frames) - 1):
+        start_idx = constrained_frames[i]
+        end_idx = constrained_frames[i + 1]
+        start_slice = slice(start_idx, start_idx + 1)
+        end_slice = slice(end_idx, end_idx + 1)
+        inbetween_slice = slice(start_idx + 1, end_idx)
+
+        pos[...,start_idx:end_idx+1,:,:],rot9d[...,start_idx:end_idx+1,:,:,:] = benchmark.get_interpolated_local_pos_rot(pos, rot9d, inbetween_slice)
+
+    return pos,rot9d
 
 def train(config):
     global ATTENTION_MODE
@@ -313,10 +312,24 @@ def train(config):
     f_loss_avg = 0
 
     min_benchmark_loss = float("inf")
-    
+    inter_pos,inter_rot9d,inter_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
             (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data    # FIXME:返回类型：需要pos,rot[9D]
+            # trans
+            min_trans = min(frame_nums)-2
+            prob =random.uniform(0,1)
+            trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
+            trans_len = max_trans if trans_len>max_trans else trans_len
+            target_idx = context_len + trans_len
+            seq_slice = slice(context_len, target_idx)
+            
+            # get random midway target frames
+            midway_targets = get_midway_targets(
+                seq_slice, midway_targets_amount, midway_targets_p)
+            if INIT_INTERP!="POS-ONLY":
+                inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice, midway_targets)
+                inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
             rot_6d = data_utils.matrix9D_to_6D_torch(rotations) # get-input需要的是6d
             if add_geo_FLAG:
                 trends=torch.cat([torch.zeros([trends.shape[0],SEQNUM_GEO,trends.shape[-1]],dtype=dtype,device=device),
@@ -340,7 +353,13 @@ def train(config):
                 if add_geo_FLAG:
                     geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                     geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
-                
+            if INIT_INTERP!="POS-ONLY":
+                for j in range(remove_len):
+                    remove_list=remove_idx[j]
+                    inter_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
+                    inter_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
+                inter_x = get_model_input(inter_pos,inter_rot6d)
+                inter_x_zs = (inter_x - mean) / std
             global_rotations = rotations
             global_positions = positions
 
@@ -353,16 +372,6 @@ def train(config):
             #     trans_len = max_trans_
             # else:
             #     trans_len = random.randint(min_trans, max_trans_)
-            min_trans = min(frame_nums)-2
-            prob =random.uniform(0,1)
-            trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
-            trans_len = max_trans if trans_len>max_trans else trans_len
-            target_idx = context_len + trans_len
-            seq_slice = slice(context_len, target_idx)
-
-            # get random midway target frames
-            midway_targets = get_midway_targets(
-                seq_slice, midway_targets_amount, midway_targets_p)
 
             # attention mask
             atten_mask = get_attention_mask(
@@ -403,7 +412,8 @@ def train(config):
             if Data_Mask_MODE==2:
                 x[...,:12,-1]=2
             x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice, r_slice)
-
+            if INIT_INTERP!="POS-ONLY":
+                x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
             # calculate model output y
             optimizer.zero_grad()
             model.train()
@@ -603,6 +613,8 @@ def train(config):
 
 def eval_on_dataset(config, data_loader, model, trans_len,
                     debug=False, post_process=False):
+    global INIT_INTERP
+    global SEQNUM_GEO
     device = data_loader.dataset.device
     dtype = data_loader.dataset.dtype
     window_len = data_loader.dataset.window + SEQNUM_GEO
@@ -639,6 +651,9 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         assert SEQNUM_GEO==0
     for i, data in enumerate(data_loader, 0):
         (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data # FIXED:返回类型
+        if INIT_INTERP!="POS-ONLY":
+                inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice)
+                inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
         rot_6d = data_utils.matrix9D_to_6D_torch(rotations)
         if add_geo_FLAG==False:
             geo = None
@@ -659,11 +674,18 @@ def eval_on_dataset(config, data_loader, model, trans_len,
             if add_geo_FLAG:
                 geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                 geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
+        if INIT_INTERP!="POS-ONLY":
+                for j in range(remove_len):
+                    remove_list=remove_idx[j]
+                    inter_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
+                    inter_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
+                inter_x = get_model_input(inter_pos,inter_rot6d)
+                inter_x_zs = (inter_x - mean) / std
         # notice: rotations参与计算loss了
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
         pos_new, rot_new = evaluate(
             model, positions, rot_6d, seq_slice,
-            indices, mean, std, atten_mask, post_process,geo=geo)
+            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = inter_x_zs)
         if add_geo_FLAG:
             positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
             rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
@@ -717,7 +739,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
 def evaluate(model, positions, rotations, seq_slice, indices,
              mean, std, atten_mask, post_process=False,
-             midway_targets=(),geo=None):
+             midway_targets=(),geo=None,inter_x_zs=None):
     """
     Generate transition animation.
 
@@ -762,6 +784,8 @@ def evaluate(model, positions, rotations, seq_slice, indices,
     """
     global zscore_MODE
     global Data_Mask_MODE
+    global INIT_INTERP
+    global SEQNUM_GEO
     dtype = positions.dtype
     device = positions.device
     window_len = positions.shape[-3]+SEQNUM_GEO if geo is not None else positions.shape[-3]
@@ -819,12 +843,13 @@ def evaluate(model, positions, rotations, seq_slice, indices,
                 data_mask.expand(*x_zscore.shape[:-1], data_mask.shape[-1])
             ], dim=-1)
         if Data_Mask_MODE==2:
-            x[...,:12,-1]=2
-        
+            x[...,:SEQNUM_GEO,-1]=2
+
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
         x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice)
-
+        if INIT_INTERP!="POS-ONLY":
+            x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
         # calculate model output y
         model_out = model(x, keyframe_pos_idx, mask=atten_mask)
         y = x_zscore.clone().detach()
