@@ -19,7 +19,7 @@ from motion_inbetween.train import rmi
 from motion_inbetween.train import context_model,detail_model
 from motion_inbetween.train import utils as train_utils
 from motion_inbetween.data import utils_torch as data_utils
-# python my_infer_onestage.py onestage_context_modelbase newgeo_context_modelNOGEOdense
+# python my_infer_onestage_slerp.py ablationonestage_context_modelgeo2dAlibiNoabsGeo0slerp_lossw_trans newgeo_context_modelNOGEOdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMask newgeo_context_modelVMdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMaskNoG newgeo_context_modelNOGEOdense
 # python my_infer.py cmpgeo_context_modelVacantMean cmpgeo_context_modelDenseVacant
@@ -135,7 +135,7 @@ if __name__ == "__main__":
     model = ContextTransformer(config["model"]).to(device)
     # dense_model=ContextTransformer(dense_config["model"]).to(device)
     # load checkpoint
-    epoch, iteration = train_utils.load_checkpoint(config, model)
+    epoch, iteration = train_utils.load_checkpoint(config, model,suffix=".min")
     # train_utils.load_checkpoint(dense_config, dense_model,suffix=".min")
 
     indices = config["indices"]
@@ -181,11 +181,20 @@ if __name__ == "__main__":
         assert add_len==0
         sparse_trans=total_len-2
         dense_trans=0
-        prime_flag=False
 
-
-        assert prime_flag==False
         print("dense trans:{} sparse trans:{}".format(dense_trans,sparse_trans))
+        
+        target_idx = context_len + sparse_trans
+        seq_slice = slice(context_len, target_idx)
+        window_len = sparse_trans+2+SEQNUM_GEO
+        dtype = dataset.dtype
+
+        midway=[]
+        
+        if context_model.INIT_INTERP!="POS-ONLY":
+                inter_pos, inter_rot9d = context_model.get_interp_pos_rot(positions, rotations, seq_slice)
+                inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
+        
         ##################33
         rot_6d = data_utils.matrix9D_to_6D_torch(rotations)
         if add_geo_FLAG==False:
@@ -207,19 +216,19 @@ if __name__ == "__main__":
             if add_geo_FLAG:
                 geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                 geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
+        if context_model.INIT_INTERP!="POS-ONLY":
+                for j in range(remove_len):
+                    remove_list=remove_idx[j]
+                    inter_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
+                    inter_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
+                inter_x = context_model.get_model_input(inter_pos,inter_rot6d)
+                inter_x_zs = (inter_x - mean) / std
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
         ##################33
         # for sparse
         sparse_seq=slice(0,total_len,dense_trans+1)
         sp_pos=positions[:,sparse_seq]
         sp_rot=rot_6d[:,sparse_seq]     # rotations[:,sparse_seq]
-
-        target_idx = context_len + sparse_trans
-        seq_slice = slice(context_len, target_idx)
-        window_len = sparse_trans+2+SEQNUM_GEO
-        dtype = dataset.dtype
-
-        midway=[]
         
         # attention mask
         atten_mask = context_model.get_attention_mask(
@@ -230,80 +239,21 @@ if __name__ == "__main__":
             midway.append(int(x))
             sp_pos_new, sp_rot_new = context_model.evaluate(
                 model, sp_pos, sp_rot, seq_slice,
-                indices, mean, std, atten_mask, post_process=False,midway_targets=midway,geo=geo)
+                indices, mean, std, atten_mask, post_process=False,midway_targets=midway,geo=geo,inter_x_zs = inter_x_zs)
         else:
             sp_pos_new, sp_rot_new = context_model.evaluate(
                 model, sp_pos, sp_rot, seq_slice,
-                indices, mean, std, atten_mask, post_process=False,geo=geo)
+                indices, mean, std, atten_mask, post_process=False,geo=geo,inter_x_zs = inter_x_zs)
         parents=[]
         # NOTICE:evaluate的结果包含geo的长度,rot_9d
         assert sp_pos.shape[1]+SEQNUM_GEO==sp_pos_new.shape[1]
         
         # for dense
         res_slice=slice(seq_slice.start-1,seq_slice.stop+1)
-        if dense_trans:
-            # need dense prediction
-            pos_new=positions.clone().detach()
-            rot_new=rotations.clone().detach()
-            pos_new[:,sparse_seq]=sp_pos_new[:,res_slice]
-            rot_new[:,sparse_seq]=sp_rot_new[:,res_slice]
-            rot6d_new = data_utils.matrix9D_to_6D_torch(rot_new)
-            # mean_d:
-            for j in range(remove_len):
-                remove_list=remove_idx[j]
-                positions[j,:,remove_list,:]=fill_value_p_dense[remove_list,:]
-                rot_6d[j,:,remove_list,:]=fill_value_r6d_dense[remove_list,:]
-                pos_new[j,:,remove_list,:]=fill_value_p_dense[remove_list,:]
-                rot6d_new[j,:,remove_list,:]=fill_value_r6d_dense[remove_list,:]
-
-            rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
-            rot_new = data_utils.matrix6D_to_9D_torch(rot6d_new)
-            # # BUG:
-            # spgpos_batch_loss, spgquat_batch_loss, _, _ = \
-            #     benchmark.get_rmi_style_batch_loss(
-            #         sp_pos,rotations[:,sparse_seq], sp_pos_new[:,res_slice], sp_rot_new[:,res_slice], parents,
-            #         1, 1+sparse_trans, mean_rmi, std_rmi)
-            # print(f"sparse loss| {spgpos_batch_loss[0]} | {spgquat_batch_loss[0]}")
-            # # BUG
-            
-            arr=range(total_len)
-            key_id_list=arr[sparse_seq]
-            for j in range(len(key_id_list)-1):
-                start_idx=key_id_list[j]
-                end_idx=key_id_list[j+1]
-                dense_seq=slice(start_idx,end_idx+1)
-                den_pos=pos_new[:,dense_seq]
-                den_rot=rot6d_new[:,dense_seq]
-
-                target_idx = 1 + dense_trans
-                seq_slice = slice(1, target_idx)
-                window_len = dense_trans+2
-                dtype = dataset.dtype
-
-                # attention mask
-                atten_mask = context_model.get_attention_mask(
-                    window_len, 1, target_idx, device)
-
-                den_pos_new, den_rot_new = context_model.evaluate(
-                    dense_model, den_pos, den_rot, seq_slice,
-                    indices, mean_d, std_d, atten_mask,geo=None)
-
-                res_dense_slice=slice(seq_slice.start-1,seq_slice.stop+1)
-                # # BUG:
-                # dgpos_batch_loss, dgquat_batch_loss, _, _ = \
-                #     benchmark.get_rmi_style_batch_loss(
-                #         den_pos,rot_new[:,dense_seq], den_pos_new[:,res_slice], den_rot_new[:,res_slice], parents,
-                #         1, 1+dense_trans, mean_rmi, std_rmi)
-                # print(f"dense loss| {dgpos_batch_loss[0]} | {dgquat_batch_loss[0]}")
-                # # BUG
-                pos_new[:,dense_seq]=den_pos_new[:,res_dense_slice]
-                rot_new[:,dense_seq]=den_rot_new[:,res_dense_slice]
-            # pos_new=post_process(pos_new,key_id_list)
-            # pos_new,rot_new=post_process(pos_new,rot_new,key_id_list)              
-        else:
-            pos_new=sp_pos_new[:,res_slice]
-            rot_new=sp_rot_new[:,res_slice]
-            assert pos_new.shape[1]==sparse_trans+2
+        
+        pos_new=sp_pos_new[:,res_slice]
+        rot_new=sp_rot_new[:,res_slice]
+        assert pos_new.shape[1]==sparse_trans+2
             
         # restore vacant teeth
         print(remove_len)
@@ -350,12 +300,12 @@ if __name__ == "__main__":
         datapath,name=os.path.split(file_name)
         basename,exp=os.path.splitext(name)
         tmp_removeidx=[int(kk) for kk in remove_idx[0]]
-        json_path_gt = "./res1013onestage_p/{}_{}_{}_sp{}_dense{}_gt.json".format(
+        json_path_gt = "./res1121_slerpinit/{}_{}_{}_sp{}_dense{}_gt.json".format(
             args.config, args.dataset, basename,sparse_trans,dense_trans)
         visualization.save_data_to_json_tooth(
             json_path_gt, positions[0], quat[0],gpos_batch_loss[0], gquat_batch_loss[0],sparse_trans,dense_trans,remove_idx=tmp_removeidx)
 
-        json_path = "./res1013onestage_p/{}_{}_{}_sp{}_dense{}.json".format(
+        json_path = "./res1121_slerpinit/{}_{}_{}_sp{}_dense{}.json".format(
             args.config, args.dataset, basename,sparse_trans,dense_trans)
         visualization.save_data_to_json_tooth(
             json_path, pos_new[0], quat_new[0],gpos_batch_loss[0], gquat_batch_loss[0],sparse_trans,dense_trans,remove_idx=tmp_removeidx)
