@@ -113,7 +113,7 @@ class BiAlibiPositionalBias(AlibiPositionalBias):
         alibi_right = hbias*slopes_right
         alibi_bias = torch.triu(alibi_right) + torch.tril(alibi_left)
 
-        return qk_dots + bias
+        return qk_dots + alibi_bias
 class SinusoidPositionalEncoding(nn.Module):
     def __init__(self, dim, base=10000):
         """
