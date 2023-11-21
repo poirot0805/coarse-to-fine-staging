@@ -221,17 +221,18 @@ def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice=None)
     return x
 
 def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
+    global SEQNUM_GEO
     constrained_frames = [seq_slice.start - 1, seq_slice.stop]
     constrained_frames.extend(midway_targets)
     constrained_frames.sort()
     for i in range(len(constrained_frames) - 1):
-        start_idx = constrained_frames[i]
-        end_idx = constrained_frames[i + 1]
+        start_idx = constrained_frames[i]-SEQNUM_GEO
+        end_idx = constrained_frames[i + 1]-SEQNUM_GEO
         start_slice = slice(start_idx, start_idx + 1)
         end_slice = slice(end_idx, end_idx + 1)
-        inbetween_slice = slice(start_idx + 1, end_idx)
-
-        pos[...,start_idx:end_idx+1,:,:],rot9d[...,start_idx:end_idx+1,:,:,:] = benchmark.get_interpolated_local_pos_rot(pos, rot9d, inbetween_slice)
+        inbetween_slice = slice(start_idx, end_idx+1)
+        inter_slice =slice(1,end_idx-start_idx)
+        pos[...,inbetween_slice,:,:],rot9d[...,inbetween_slice,:,:,:] = benchmark.get_interpolated_local_pos_rot(pos[...,inbetween_slice,:,:], rot9d[...,inbetween_slice,:,:,:], inter_slice)
 
     return pos,rot9d
 
@@ -607,8 +608,12 @@ def train(config):
                 info_idx += 1
 
             iteration += 1
-            
+        
         epoch += 1
+        if epoch==200:
+            train_utils.save_checkpoint(
+                            config, model, epoch, iteration,
+                            optimizer, scheduler, suffix=".200emin")
 
 
 def eval_on_dataset(config, data_loader, model, trans_len,
