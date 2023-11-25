@@ -225,6 +225,8 @@ def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
     constrained_frames = [seq_slice.start - 1, seq_slice.stop]
     constrained_frames.extend(midway_targets)
     constrained_frames.sort()
+    inter_pos = pos.clone()
+    inter_rot9d = rot9d.clone()
     for i in range(len(constrained_frames) - 1):
         start_idx = constrained_frames[i]-SEQNUM_GEO
         end_idx = constrained_frames[i + 1]-SEQNUM_GEO
@@ -232,9 +234,9 @@ def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
         end_slice = slice(end_idx, end_idx + 1)
         inbetween_slice = slice(start_idx, end_idx+1)
         inter_slice =slice(1,end_idx-start_idx)
-        pos[...,inbetween_slice,:,:],rot9d[...,inbetween_slice,:,:,:] = benchmark.get_interpolated_local_pos_rot(pos[...,inbetween_slice,:,:], rot9d[...,inbetween_slice,:,:,:], inter_slice)
+        inter_pos[...,inbetween_slice,:,:],inter_rot9d[...,inbetween_slice,:,:,:] = benchmark.get_interpolated_local_pos_rot(pos[...,inbetween_slice,:,:], rot9d[...,inbetween_slice,:,:,:], inter_slice)
 
-    return pos,rot9d
+    return inter_pos,inter_rot9d
 
 def train(config):
     global ATTENTION_MODE
@@ -331,6 +333,7 @@ def train(config):
             if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice, midway_targets)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
+                assert (inter_pos==positions).all()==False
             rot_6d = data_utils.matrix9D_to_6D_torch(rotations) # get-input需要的是6d
             if add_geo_FLAG:
                 trends=torch.cat([torch.zeros([trends.shape[0],SEQNUM_GEO,trends.shape[-1]],dtype=dtype,device=device),
