@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from einops import rearrange
-from motion_inbetween.model import transformer
+from motion_inbetween_space.model import transformer
 class STTransformer(nn.Module):
     def __init__(self, config):
         super(STTransformer, self).__init__()

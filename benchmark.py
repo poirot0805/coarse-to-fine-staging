@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from motion_inbetween.data import utils_torch as data_utils
+from motion_inbetween_space.data import utils_torch as data_utils
 
 
 """

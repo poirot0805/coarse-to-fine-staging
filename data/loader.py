@@ -5,7 +5,7 @@ from torch.utils.data import Dataset
 import numpy as np
 import json
 
-from motion_inbetween.data import bvh, utils_np
+from motion_inbetween_space.data import bvh, utils_np
 
 
 class BvhDataSet(Dataset):

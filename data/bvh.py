@@ -3,7 +3,7 @@ import os
 import json
 import numpy as np
 
-from motion_inbetween.data import utils_np
+from motion_inbetween_space.data import utils_np
 
 
 class Animation(object):

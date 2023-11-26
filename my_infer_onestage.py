@@ -12,13 +12,13 @@ sys.path.append(package_root)
 
 import torch
 
-from motion_inbetween import benchmark, visualization
-from motion_inbetween.model import ContextTransformer,DetailTransformer
-from motion_inbetween.config import load_config_by_name
-from motion_inbetween.train import rmi
-from motion_inbetween.train import context_model,detail_model
-from motion_inbetween.train import utils as train_utils
-from motion_inbetween.data import utils_torch as data_utils
+from motion_inbetween_space import benchmark, visualization
+from motion_inbetween_space.model import ContextTransformer,DetailTransformer
+from motion_inbetween_space.config import load_config_by_name
+from motion_inbetween_space.train import rmi
+from motion_inbetween_space.train import context_model,detail_model
+from motion_inbetween_space.train import utils as train_utils
+from motion_inbetween_space.data import utils_torch as data_utils
 # python my_infer_onestage_slerp.py ablationonestage_context_modelgeo2dAlibiNoabsGeo0slerp_lossw_trans newgeo_context_modelNOGEOdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMask newgeo_context_modelVMdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMaskNoG newgeo_context_modelNOGEOdense
