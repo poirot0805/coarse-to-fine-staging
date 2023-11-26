@@ -6,6 +6,70 @@ from einops import rearrange, repeat, reduce
 from einops.layers.torch import Rearrange
 def exists(val):
     return val is not None
+
+class TeethPositionalBias(nn.Module):
+    def __init__(self, heads, **kwargs):
+        super().__init__()
+        self.heads = heads
+        slopes = torch.Tensor(self._get_slopes(heads))
+        slopes = rearrange(slopes, 'h -> h 1 1')
+        self.register_buffer('slopes', slopes, persistent = False)
+        self.register_buffer('bias', None, persistent = False)
+    
+    def get_bias(self, i, j, device):
+        i_arange = torch.arange(28, device = device)
+        j_arange = torch.arange(28, device = device)
+        bias = -torch.abs(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
+        bias[...,:14,14:]-=14
+        bias[...,14:,:14]-=14
+        for i in range(1,13):
+            bias[...,i,i+14]=-1
+            bias[...,i+14,i]=-1
+            
+            bias[...,i,i+13]=-2
+            bias[...,i+13,i]=-2
+            
+            bias[...,i,i+15]=-2
+            bias[...,i+15,i]=-2
+        bias[...,0,14]=-1
+        bias[...,14,0]=-1
+        bias[...,0,15]=-2
+        bias[...,15,0]=-2
+        
+        bias[...,13,27]=-1
+        bias[...,27,13]=-1
+        bias[...,13,26]=-2
+        bias[...,26,13]=-2
+        return bias
+
+    @staticmethod
+    def _get_slopes(heads):
+        def get_slopes_power_of_2(n):
+            start = (2**(-2**-(math.log2(n)-3)))
+            ratio = start
+            return [start*ratio**i for i in range(n)]
+
+        if math.log2(heads).is_integer():
+            return get_slopes_power_of_2(heads)
+
+        closest_power_of_2 = 2 ** math.floor(math.log2(heads))
+        return get_slopes_power_of_2(closest_power_of_2) + get_slopes_power_of_2(2 * closest_power_of_2)[0::2][:heads-closest_power_of_2]
+
+    def forward(self, qk_dots):
+        h, i, j, device = *qk_dots.shape[-3:], qk_dots.device
+
+        if exists(self.bias) and self.bias.shape[-1] >= j:
+            return qk_dots + self.bias[..., :i,:j]
+        
+        if not exists(self.bias):
+            bias = self.get_bias(i, j, device)
+            bias = bias * self.slopes
+
+            num_heads_unalibied = h - bias.shape[-3]
+            bias = F.pad(bias, (0, 0, 0, 0, 0, num_heads_unalibied))
+            self.register_buffer('bias', bias, persistent = False)
+        return qk_dots + self.bias[..., :i,:j]
+    
 class AlibiPositionalBias(nn.Module):
     def __init__(self, heads, **kwargs):
         super().__init__()
@@ -142,6 +206,107 @@ class PositionwiseFeedForward(nn.Module):
             return x + self.network(self.layer_norm(x))
         else:
             return self.layer_norm(x + self.network(x))
+
+class SPMultiHeadedAttention(nn.Module):
+    def __init__(self, n_head, d_model, d_head, dropout=0.1,
+                 pre_lnorm=True, bias=False):
+        """
+        Multi-headed attention of vanilla transformer with memory mechanism.
+
+        Args:
+            n_head (int): Number of heads.
+            d_model (int): Input dimension.
+            d_head (int): Head dimension.
+            dropout (float, optional): Dropout value. Defaults to 0.1.
+            pre_lnorm (bool, optional):
+                Apply layer norm before rest of calculation. Defaults to True.
+                In original Transformer paper (pre_lnorm=False):
+                    LayerNorm(x + Sublayer(x))
+                In tensor2tensor implementation (pre_lnorm=True):
+                    x + Sublayer(LayerNorm(x))
+            bias (bool, optional):
+                Add bias to q, k, v and output projections. Defaults to False.
+
+        """
+        super(AlibiMultiHeadedAttention, self).__init__()
+
+        self.n_head = n_head
+        self.d_model = d_model
+        self.d_head = d_head
+        self.dropout = dropout
+        self.pre_lnorm = pre_lnorm
+        self.bias = bias
+        self.atten_scale = 1 / math.sqrt(self.d_model)
+
+        self.q_linear = nn.Linear(d_model, n_head * d_head, bias=bias)
+        self.k_linear = nn.Linear(d_model, n_head * d_head, bias=bias)
+        self.v_linear = nn.Linear(d_model, n_head * d_head, bias=bias)
+        self.out_linear = nn.Linear(n_head * d_head, d_model, bias=bias)
+
+        self.droput_layer = nn.Dropout(dropout)
+        self.atten_dropout_layer = nn.Dropout(dropout)
+
+        self.layer_norm = nn.LayerNorm(d_model)
+        self.alibi_pos = TeethPositionalBias(n_head)
+
+    def forward(self, hidden, memory=None, mask=None):
+        """
+        Args:
+            hidden (Tensor): Input embedding or hidden state of previous layer.
+                Shape: (batch, seq, dim)
+            memory (Tensor): Memory tensor of previous layer.
+                Shape: (batch, mem_len, dim)
+            mask (BoolTensor, optional): Attention mask.
+                Set item value to True if you DO NOT want keep certain
+                attention score, otherwise False. Defaults to None.
+                Shape: (seq, seq+mem_len).
+        """
+        if memory is None:
+            combined = hidden
+        else:
+            combined = torch.cat([memory, hidden], dim=1)
+
+        if self.pre_lnorm:
+            hidden = self.layer_norm(hidden)
+            combined = self.layer_norm(combined)
+
+        # shape: (batch, q/k/v_len, dim)
+        q = self.q_linear(hidden)
+        k = self.k_linear(combined)
+        v = self.v_linear(combined)
+
+        # reshape to (batch, q/k/v_len, n_head, d_head)
+        q = q.reshape(q.shape[0], q.shape[1], self.n_head, self.d_head)
+        k = k.reshape(k.shape[0], k.shape[1], self.n_head, self.d_head)
+        v = v.reshape(v.shape[0], v.shape[1], self.n_head, self.d_head)
+
+        # transpose to (batch, n_head, q/k/v_len, d_head)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # (batch, n_head, q_len, k_len)
+        atten_score = torch.matmul(q, k.transpose(-1, -2)) # * self.atten_scale
+        atten_score = self.alibi_pos(atten_score)
+        if mask is not None:
+            # apply attention mask
+            atten_score = atten_score.masked_fill(mask, float("-inf"))
+        atten_score = atten_score.softmax(dim=-1)
+        atten_score = self.atten_dropout_layer(atten_score)
+
+        # (batch, n_head, q_len, d_head)
+        atten_vec = torch.matmul(atten_score, v)
+        # (batch, q_len, n_head*d_head)
+        atten_vec = atten_vec.transpose(1, 2).flatten(start_dim=-2)
+
+        # linear projection
+        output = self.droput_layer(self.out_linear(atten_vec))
+
+        if self.pre_lnorm:
+            return hidden + output
+        else:
+            return self.layer_norm(hidden + output)
+
 
 class AlibiMultiHeadedAttention(nn.Module):
     def __init__(self, n_head, d_model, d_head, dropout=0.1,

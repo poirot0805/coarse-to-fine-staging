@@ -7,11 +7,11 @@ import math
 import torch
 from torch.optim import Adam
 
-from motion_inbetween import benchmark
-from motion_inbetween.model import ContextTransformer
-from motion_inbetween.data import utils_torch as data_utils
-from motion_inbetween.train import rmi
-from motion_inbetween.train import utils as train_utils
+from motion_inbetween_space import benchmark
+from motion_inbetween_space.model import STTransformer
+from motion_inbetween_space.data import utils_torch as data_utils
+from motion_inbetween_space.train import rmi
+from motion_inbetween_space.train import utils as train_utils
 
 SEQNUM_GEO=12
 ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
@@ -51,7 +51,9 @@ def get_model_input(positions, rotations):
     # x = torch.cat([rot, positions[:, :, 0, :]], dim=-1)
     x = torch.cat([rot, pos], dim=-1) # NOTICE:已经将原来的root pos改为所有pos
     return x
-
+def get_model_input_sp(positions, rotations):
+    x = torch.cat([rotations,positions],dim=-1)
+    return x
 def get_model_output(model, state_zscore, keyframe_pos_idx, data_mask, atten_mask,
                      foot_contact, seq_slice, c_slice, rp_slice):
     data_mask = data_mask.expand(*state_zscore.shape[:-1], data_mask.shape[-1])
@@ -91,7 +93,7 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
             # parents = parents[0]
             rotations = data_utils.matrix9D_to_6D_torch(rotations) # get-input需要的是6d
             # positions, rotations = data_utils.to_start_centered_data(positions, rotations, context_len)  # BUG:不需要这一句
-            x = get_model_input(positions, rotations)
+            x = get_model_input_sp(positions, rotations)
             input_data.append(x.cpu().numpy())
 
         input_data = np.concatenate(input_data, axis=0)
@@ -110,7 +112,6 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
         print("Train stats wrote to {}".format(stats_path))
 
     return train_stats["mean"], train_stats["std"]
-
 
 def get_train_stats_torch(config, dtype, device,
                           use_cache=True, stats_folder=None,
@@ -161,6 +162,14 @@ def get_attention_mask(window_len, context_len, target_idx, device,
     # (1, seq, seq)
     return atten_mask
 
+def get_spattention_mask(device,remove_idx=[]):
+    atten_mask = torch.zeros(28,28,
+                            device=device, dtype=torch.bool)
+    
+    atten_mask[:,remove_idx] = True
+    atten_mask = atten_mask.unsqueeze(0)
+    # (1, seq, seq)
+    return atten_mask
 
 def get_data_mask(window_len, d_mask, constrained_slices,
                   context_len, target_idx, device, dtype,
@@ -178,7 +187,21 @@ def get_data_mask(window_len, d_mask, constrained_slices,
     # (seq, d_mask)
     return data_mask
 
+def get_data_mask_sp(window_len, d_mask, constrained_slices,
+                  context_len, target_idx, device, dtype,
+                  midway_targets=()):
+    # 0 for unknown and 1 for known
+    # print("get_data_mask_constraint:{}".format(constrained_slices))
+    data_mask = torch.zeros((window_len, 28,d_mask), device=device, dtype=dtype)
+    data_mask[:context_len,:, :] = 1
+    data_mask[target_idx, :,:] = 1
+    # NOTICE: 可以设置config中的d_mask和constrained_slice来固定特定牙齿位置
+    for s in constrained_slices:
+        # print("get_data_mask:{}".format(s))
+        data_mask[midway_targets,:, s] = 1
 
+    # (seq, d_mask)
+    return data_mask
 def get_keyframe_pos_indices(window_len, seq_slice, dtype, device):
     # position index relative to context and target frame
     ctx_idx = torch.arange(window_len, dtype=dtype, device=device)
@@ -219,7 +242,28 @@ def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice=None)
         )
 
     return x
+def set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice):
+    # set root position of missing part to linear interpolation of
+    # root position between constrained frames (i.e. last context frame,
+    # midway target frames and target frame).
+    p_slice = slice(6,9)
+    constrained_frames = [seq_slice.start - 1, seq_slice.stop]
+    constrained_frames.extend(midway_targets)
+    constrained_frames.sort()
+    for i in range(len(constrained_frames) - 1):
+        start_idx = constrained_frames[i]
+        end_idx = constrained_frames[i + 1]
+        start_slice = slice(start_idx, start_idx + 1)
+        end_slice = slice(end_idx, end_idx + 1)
+        inbetween_slice = slice(start_idx + 1, end_idx)
 
+        x[..., inbetween_slice,:, p_slice] = \
+            benchmark.get_linear_interpolation2(
+                x[..., start_slice,:, p_slice],
+                x[..., end_slice,:,p_slice],
+                end_idx - start_idx - 1
+        )
+    return x
 def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
     global SEQNUM_GEO
     constrained_frames = [seq_slice.start - 1, seq_slice.stop]
@@ -274,7 +318,7 @@ def train(config):
     vis, info_idx = train_utils.init_visdom(config)
 
     # initialize model
-    model = ContextTransformer(config["model"]).to(device)
+    model = STTransformer(config["model"]).to(device)
 
     # initialize optimizer
     optimizer = Adam(model.parameters(), lr=config["train"]["lr"])
@@ -288,7 +332,7 @@ def train(config):
 
     # training stats
     mean, std = get_train_stats_torch(config, dtype, device)    
-
+    print("mean shape:",mean.shape)
     add_geo_FLAG = config["train"]["add_geo"]
     if add_geo_FLAG:
         SEQNUM_GEO = 12
@@ -301,7 +345,7 @@ def train(config):
     if fill_mode=="missing-mean" or fill_mode=="vacant-mean":
         fill_value=mean
         print("YES-MEAN")
-    fill_value_p,fill_value_r6d=from_flat_data_joint_data(fill_value)
+    fill_value_p,fill_value_r6d=fill_value[:,6:],fill_value[:,:6]#FIXME#from_flat_data_joint_data(fill_value) 
     min_trans = config["train"]["min_trans"]
     max_trans = config["train"]["max_trans"]
     midway_targets_amount = config["train"]["midway_targets_amount"]
@@ -318,7 +362,7 @@ def train(config):
     inter_pos,inter_rot9d,inter_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
-            (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data    # FIXME:返回类型：需要pos,rot[9D]
+            (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
             # trans
             min_trans = min(frame_nums)-2
             prob =random.uniform(0,1)
@@ -381,21 +425,21 @@ def train(config):
             atten_mask = get_attention_mask(
                 window_len, context_len, target_idx, device,
                 midway_targets=midway_targets)
-
+            
             # data mask
-            data_mask = get_data_mask(
+            data_mask = get_data_mask_sp(
                 window_len, model.d_mask, model.constrained_slices,
-                context_len, target_idx, device, dtype, midway_targets)
+                context_len, target_idx, device, dtype, midway_targets)#FIXME
 
             # position index relative to context and target frame
             keyframe_pos_idx = get_keyframe_pos_indices(
                 window_len, seq_slice, dtype, device)
 
             # prepare model input
-            x_gt = get_model_input(positions, rot_6d)
+            x_gt = get_model_input_sp(positions, rot_6d)#FIXME
             x_gt_zscore = (x_gt - mean) / std
             if add_geo_FLAG:
-                geo_ctrl = get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
+                geo_ctrl = geo#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)#FIXME
                 if zscore_MODE=="seq":
                     x_gt_ = (x_gt - mean) / std
                     x_gt_zscore = torch.cat([geo_ctrl,x_gt_],dim=1)
@@ -415,7 +459,7 @@ def train(config):
                 ], dim=-1)
             if Data_Mask_MODE==2:
                 x[...,:12,-1]=2
-            x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice, r_slice)
+            x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
             if INIT_INTERP!="POS-ONLY":
                 x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
             # calculate model output y
@@ -428,9 +472,11 @@ def train(config):
                 c_out[..., seq_slice, :] = torch.sigmoid(
                     model_out[..., seq_slice, c_slice]) 
             y = x_gt_zscore.clone().detach()
-            y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
-            if zscore_MODE!="no":
-                y = y * std + mean
+            y[..., seq_slice, :] = model_out[..., seq_slice, :]#FIXME
+            if zscore_MODE!="no":#FIXME
+                mean_n = get_model_input(mean[:,6:],mean[:,:6])
+                std_n = get_model_input(std[:,6:],std[:,:6])
+                y = y * std_n + mean_n
 
             if add_geo_FLAG:
                 positions = torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),
@@ -446,8 +492,8 @@ def train(config):
             rot_6d_new = train_utils.get_new_rotations6D(y,indices)
             foot_state=torch.cat([pos_new,rot_6d_new],dim=-1)  
             
-
-            r_loss = train_utils.cal_r_loss(x_gt, y, seq_slice, indices)
+            
+            r_loss = train_utils.cal_r_loss_sp(x_gt, y, seq_slice, indices)#FIXME
             # smooth_loss = train_utils.cal_smooth_loss(gpos_new, seq_slice)
             smooth_loss = train_utils.cal_smooth_loss(pos_new, seq_slice)   # FIXME:rot要不要加进去
             # p_loss = train_utils.cal_p_loss(global_positions, gpos_new, seq_slice)
@@ -640,7 +686,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     fill_value = torch.zeros(mean.shape,dtype=dtype,device=device)
     if fill_mode=="missing-mean" or fill_mode=="vacant-mean":
         fill_value=mean
-    fill_value_p,fill_value_r6d=from_flat_data_joint_data(fill_value)
+    fill_value_p,fill_value_r6d=fill_value[:,6:],fill_value[:,:6]#FIXME#from_flat_data_joint_data(fill_value) 
     
     # attention mask
     atten_mask = get_attention_mask(
@@ -821,10 +867,10 @@ def evaluate(model, positions, rotations, seq_slice, indices,
 
         # prepare model input          
         geo_ctrl=None
-        x_orig = get_model_input(positions, rotations)
+        x_orig = get_model_input_sp(positions, rotations)#FIXME
         x_zscore = (x_orig - mean) / std
         if geo is not None:
-            geo_ctrl=get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
+            geo_ctrl=geo #FIXME#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
             if zscore_MODE=="seq":
                 x_ = (x_orig - mean) / std
                 x_zscore = torch.cat([geo_ctrl,x_],dim=1)
@@ -836,9 +882,9 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             x_zscore = x_orig
 
         # data mask (seq, 1)
-        data_mask = get_data_mask(
+        data_mask = get_data_mask_sp(
             window_len, model.d_mask, model.constrained_slices, context_len,
-            target_idx, device, dtype, midway_targets)
+            target_idx, device, dtype, midway_targets) #FIXME
 
         keyframe_pos_idx = get_keyframe_pos_indices(
             window_len, seq_slice, dtype, device)
@@ -855,7 +901,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
 
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
-        x = set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice)
+        x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
         if INIT_INTERP!="POS-ONLY":
             x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
         # calculate model output y
@@ -867,8 +913,10 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             y = train_utils.anim_post_process(y, x_zscore, seq_slice)
 
         # reverse zscore
-        if zscore_MODE!="no":
-            y = y * std + mean
+        if zscore_MODE!="no":#FIXME
+            mean_n = get_model_input(mean[:,6:],mean[:,:6])
+            std_n = get_model_input(std[:,6:],std[:,:6])
+            y = y * std_n + mean_n
         # notice: 原来的版本中rotations一直是9D的，新版本输入evaluation的是6D的，因此转化一下
         rotations = data_utils.matrix6D_to_9D_torch(rotations)
         # GEO:
