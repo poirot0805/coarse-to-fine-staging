@@ -471,12 +471,15 @@ def train(config):
                 c_out = trends.clone().detach()
                 c_out[..., seq_slice, :] = torch.sigmoid(
                     model_out[..., seq_slice, c_slice]) 
-            y = x_gt_zscore.clone().detach()
-            y[..., seq_slice, :] = model_out[..., seq_slice, :]#FIXME
+            y = x_gt_zscore.clone().detach()    # BUG:x_gt是含有joint
+            tmp_out_rot = model_out[..., seq_slice, r_slice]
+            tmp_out_pos = model_out[..., seq_slice, p_slice]
+            y[..., seq_slice, :,:6] = tmp_out_rot.reshape((*tmp_out_rot.shape[:-1],28,6))#FIXME
+            y[..., seq_slice, :,6:] = tmp_out_pos.reshape((*tmp_out_pos.shape[:-1],28,3))#FIXME
+
             if zscore_MODE!="no":#FIXME
-                mean_n = get_model_input(mean[:,6:],mean[:,:6])
-                std_n = get_model_input(std[:,6:],std[:,:6])
-                y = y * std_n + mean_n
+                y = y * std + mean
+            y = get_model_input(y[...,6:],y[...,:6])
 
             if add_geo_FLAG:
                 positions = torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),
@@ -739,7 +742,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
         pos_new, rot_new = evaluate(
             model, positions, rot_6d, seq_slice,
-            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = inter_x_zs)
+            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None)
         if add_geo_FLAG:
             positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
             rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
@@ -907,16 +910,20 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         # calculate model output y
         model_out = model(x, keyframe_pos_idx, mask=atten_mask)
         y = x_zscore.clone().detach()
-        y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
+        #y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
+
+        tmp_out_rot = model_out[..., seq_slice, r_slice]
+        tmp_out_pos = model_out[..., seq_slice, p_slice]
+        y[..., seq_slice, :,:6] = tmp_out_rot.reshape((*tmp_out_rot.shape[:-1],28,6))#FIXME
+        y[..., seq_slice, :,6:] = tmp_out_pos.reshape((*tmp_out_pos.shape[:-1],28,3))#FIXME
 
         if post_process:
             y = train_utils.anim_post_process(y, x_zscore, seq_slice)
 
         # reverse zscore
         if zscore_MODE!="no":#FIXME
-            mean_n = get_model_input(mean[:,6:],mean[:,:6])
-            std_n = get_model_input(std[:,6:],std[:,:6])
-            y = y * std_n + mean_n
+            y = y * std + mean
+        y = get_model_input(y[...,6:],y[...,:6])
         # notice: 原来的版本中rotations一直是9D的，新版本输入evaluation的是6D的，因此转化一下
         rotations = data_utils.matrix6D_to_9D_torch(rotations)
         # GEO:
