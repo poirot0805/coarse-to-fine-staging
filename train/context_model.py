@@ -83,7 +83,7 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
         print("Train stats load from {}".format(stats_path))
     else:
         # calculate training stats
-        device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         dataset, data_loader = train_utils.init_bvh_dataset(
             config, dataset_name, device, shuffle=True, dtype=torch.float64)
 
@@ -303,7 +303,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -472,10 +472,9 @@ def train(config):
                 c_out[..., seq_slice, :] = torch.sigmoid(
                     model_out[..., seq_slice, c_slice]) 
             y = x_gt_zscore.clone().detach()    # BUG:x_gt是含有joint
-            tmp_out_rot = model_out[..., seq_slice, r_slice]
-            tmp_out_pos = model_out[..., seq_slice, p_slice]
-            y[..., seq_slice, :,:6] = tmp_out_rot.reshape((*tmp_out_rot.shape[:-1],28,6))#FIXME
-            y[..., seq_slice, :,6:] = tmp_out_pos.reshape((*tmp_out_pos.shape[:-1],28,3))#FIXME
+            tmp_out = model_out[..., seq_slice, :]
+            y[..., seq_slice, :,:] = tmp_out.reshape((*tmp_out.shape[:-1],28,9))
+
 
             if zscore_MODE!="no":#FIXME
                 y = y * std + mean
@@ -490,7 +489,7 @@ def train(config):
                                               global_positions],
                                              dim=1) # GEO
             pos_new = train_utils.get_new_positions(positions, y, indices) # FIXED:似乎只考虑了root pos return (batch,seq,joint,3)
-            rot_new = train_utils.get_new_rotations(y, indices)
+            #rot_new = train_utils.get_new_rotations(y, indices)
             
             rot_6d_new = train_utils.get_new_rotations6D(y,indices)
             foot_state=torch.cat([pos_new,rot_6d_new],dim=-1)  
@@ -912,10 +911,8 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         y = x_zscore.clone().detach()
         #y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
 
-        tmp_out_rot = model_out[..., seq_slice, r_slice]
-        tmp_out_pos = model_out[..., seq_slice, p_slice]
-        y[..., seq_slice, :,:6] = tmp_out_rot.reshape((*tmp_out_rot.shape[:-1],28,6))#FIXME
-        y[..., seq_slice, :,6:] = tmp_out_pos.reshape((*tmp_out_pos.shape[:-1],28,3))#FIXME
+        tmp_out = model_out[..., seq_slice, :]
+        y[..., seq_slice, :,:] = tmp_out.reshape((*tmp_out.shape[:-1],28,9))
 
         if post_process:
             y = train_utils.anim_post_process(y, x_zscore, seq_slice)
