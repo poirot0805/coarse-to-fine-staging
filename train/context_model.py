@@ -282,6 +282,41 @@ def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
 
     return inter_pos,inter_rot9d
 
+
+def get_new_positions(positions, y, seq_slice=slice(None, None)):
+    p_slice = slice(6,9)
+    pos_tmp=y[..., seq_slice,:, p_slice]
+    positions_new = positions.clone()
+    positions_new[..., seq_slice, :, :] = pos_tmp    # FIXED:注意维度
+
+    return positions_new
+
+
+def get_new_rotations(y, rotations=None, seq_slice=slice(None, None)):
+    r_slice = slice(0,6)
+
+    if rotations is None:
+        rot = y[..., r_slice]
+        # rot = rot.reshape(*rot.shape[:-1], -1, 6)
+        rot = data_utils.matrix6D_to_9D_torch(rot)
+    else:
+        rot_tmp = y[..., seq_slice,:, r_slice]
+        # rot_tmp = rot_tmp.reshape(*rot_tmp.shape[:-1], -1, 6)
+        rot_tmp = data_utils.matrix6D_to_9D_torch(rot_tmp)
+
+        rot = rotations.clone()
+        rot[..., seq_slice, :, :, :] = rot_tmp
+
+    return rot
+
+def get_new_rotations6D(y, rotations=None, seq_slice=slice(None, None)):
+    r_slice = slice(0,6)
+
+    if rotations is None:
+        rot = y[..., r_slice]
+    else:
+        rot = y[..., seq_slice,:, r_slice]
+    return rot
 def train(config):
     global ATTENTION_MODE
     global INIT_INTERP
@@ -478,7 +513,7 @@ def train(config):
 
             if zscore_MODE!="no":#FIXME
                 y = y * std + mean
-            y = get_model_input(y[...,6:],y[...,:6])
+            #y = get_model_input(y[...,6:],y[...,:6])
 
             if add_geo_FLAG:
                 positions = torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),
@@ -488,10 +523,10 @@ def train(config):
                 global_positions = torch.cat([torch.zeros([global_positions.shape[0],SEQNUM_GEO,*global_positions.shape[2:]],dtype=dtype,device=device),
                                               global_positions],
                                              dim=1) # GEO
-            pos_new = train_utils.get_new_positions(positions, y, indices) # FIXED:似乎只考虑了root pos return (batch,seq,joint,3)
+            pos_new = get_new_positions(positions, y)#train_utils.get_new_positions(positions, y, indices) # FIXED:似乎只考虑了root pos return (batch,seq,joint,3)
             #rot_new = train_utils.get_new_rotations(y, indices)
             
-            rot_6d_new = train_utils.get_new_rotations6D(y,indices)
+            rot_6d_new = get_new_rotations6D(y)#train_utils.get_new_rotations6D(y,indices)
             foot_state=torch.cat([pos_new,rot_6d_new],dim=-1)  
             
             
@@ -920,7 +955,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         # reverse zscore
         if zscore_MODE!="no":#FIXME
             y = y * std + mean
-        y = get_model_input(y[...,6:],y[...,:6])
+        #y = get_model_input(y[...,6:],y[...,:6])
         # notice: 原来的版本中rotations一直是9D的，新版本输入evaluation的是6D的，因此转化一下
         rotations = data_utils.matrix6D_to_9D_torch(rotations)
         # GEO:
@@ -928,9 +963,11 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
             rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
         # new pos and rot
-        pos_new = train_utils.get_new_positions(
-            positions, y, indices, seq_slice)
-        rot_new = train_utils.get_new_rotations(
-            y, indices, rotations, seq_slice)
+        pos_new = get_new_positions(positions,y,seq_slice)
+        rot_new = get_new_rotations(y,rotations,seq_slice)
+        # pos_new = train_utils.get_new_positions(
+        #     positions, y, indices, seq_slice)
+        # rot_new = train_utils.get_new_rotations(
+        #     y, indices, rotations, seq_slice)
 
         return pos_new, rot_new

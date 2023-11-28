@@ -115,13 +115,20 @@ def cal_r_loss(x, y, seq_slice, indices, weights=None):
         delta = delta * weights[..., None]
     return torch.mean(torch.abs(delta))
 def cal_r_loss_sp(x, y, seq_slice, indices, weights=None):
-    dim_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
-    x = x.flatten(start_dim=-2)
+    # dim_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
+    # x = x.flatten(start_dim=-2)
+    # # l1 loss
+    # delta = x[..., seq_slice, dim_slice] - y[..., seq_slice, dim_slice]
+    # if weights is not None:
+    #     delta = delta * weights[..., None]
+    dim_slice = slice(0,6)
+
     # l1 loss
-    delta = x[..., seq_slice, dim_slice] - y[..., seq_slice, dim_slice]
+    delta = x[..., seq_slice,:, dim_slice] - y[..., seq_slice, :,dim_slice]
     if weights is not None:
         delta = delta * weights[..., None]
     return torch.mean(torch.abs(delta))
+
 
 def cal_c_loss(c_gt, c_out, seq_slice, weights=None):
     # l1 loss

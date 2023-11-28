@@ -17,7 +17,14 @@ class STTransformer(nn.Module):
         self.n_layer = config["n_layer"]
         self.n_splayer = config["n_splayer"]
         # decoder - >temporal:24*28->512->280
-        self.encoder = nn.Linear(self.config["d_encoder_in"], self.config["d_model"])
+        self.encoder = nn.Sequential(
+            nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]),
+            nn.PReLU(),
+            nn.Dropout(self.dropout),
+            nn.Linear(self.config["d_encoder_h"], self.config["d_model"]),
+            nn.PReLU(),
+            nn.Dropout(self.dropout)
+        )
         self.decoder = nn.Sequential(
             nn.Linear(self.config["d_model"], self.config["d_decoder_h"]),
             nn.PReLU(),
@@ -78,7 +85,7 @@ class STTransformer(nn.Module):
     def Spatial_forward_features(self, x,mask=None):
         b, _, f, p = x.shape  ##### b is batch size, f is number of frames, p is number of joints
         x = rearrange(x, 'b c f p  -> (b f) p  c', )
-
+        residual = x.clone()
         #x = self.encoder(x) # embedding
         # x += self.spatial_pos_embed
         # x = self.pos_drop(x)
@@ -87,7 +94,7 @@ class STTransformer(nn.Module):
             x = self.sp_att_layers[i](x,mask=mask)
             x = self.sp_pff_layers[i](x)
 
-        x = self.Spatial_norm(x)
+        x = self.Spatial_norm(x)+residual
         x = rearrange(x, '(b f) w c -> b f (w c)', f=f)
         return x
 

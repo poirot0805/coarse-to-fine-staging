@@ -13,13 +13,13 @@ sys.path.append(package_root)
 import torch
 
 from motion_inbetween_space import benchmark, visualization
-from motion_inbetween_space.model import ContextTransformer,DetailTransformer
+from motion_inbetween_space.model import STTransformer
 from motion_inbetween_space.config import load_config_by_name
 from motion_inbetween_space.train import rmi
 from motion_inbetween_space.train import context_model,detail_model
 from motion_inbetween_space.train import utils as train_utils
 from motion_inbetween_space.data import utils_torch as data_utils
-# python my_infer_onestage_slerp.py ablationonestage_context_modelgeo2dAlibiNoabsGeo0slerp_lossw_trans newgeo_context_modelNOGEOdense
+# python my_infer_onestage_sp.py ablationsp_context_modelgeo2dAlibiNoabsGeo0 newgeo_context_modelNOGEOdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMask newgeo_context_modelVMdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMaskNoG newgeo_context_modelNOGEOdense
 # python my_infer.py cmpgeo_context_modelVacantMean cmpgeo_context_modelDenseVacant
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     SEQNUM_GEO=12 if config["train"]["add_geo"] else 0
     add_geo_FLAG = config["train"]["add_geo"]
     # initialize model
-    model = ContextTransformer(config["model"]).to(device)
+    model = STTransformer(config["model"]).to(device)
     # dense_model=ContextTransformer(dense_config["model"]).to(device)
     # load checkpoint
     epoch, iteration = train_utils.load_checkpoint(config, model,suffix=".min")
@@ -156,8 +156,8 @@ if __name__ == "__main__":
     if fill_mode=="missing-mean" or fill_mode=="vacant-mean":
         fill_value=mean
         fill_value_dense=mean_d
-    fill_value_p,fill_value_r6d=context_model.from_flat_data_joint_data(fill_value)
-    fill_value_p_dense,fill_value_r6d_dense=context_model.from_flat_data_joint_data(fill_value_dense)
+    fill_value_p,fill_value_r6d=fill_value[:,6:],fill_value[:,:6]#context_model.from_flat_data_joint_data(fill_value)
+    #fill_value_p_dense,fill_value_r6d_dense=context_model.from_flat_data_joint_data(fill_value_dense)
     
     gpos_loss_list=[]
     gquat_loss_list=[]
@@ -167,8 +167,8 @@ if __name__ == "__main__":
     all_frames=0
     for i, data in enumerate(data_loader, 0):
         (positions, rotations, file_name, real_frame_num,trends,geo,remove_idx,data_idx) = data # FIXED:返回类型(1,seq,joint,3)
-        tmp_pos=positions
-        tmp_rot9d=rotations
+        tmp_pos=positions.clone()
+        tmp_rot9d=rotations.clone()
         file_name=file_name[0]
         print(f"file name:{file_name}")
         
@@ -239,11 +239,11 @@ if __name__ == "__main__":
             midway.append(int(x))
             sp_pos_new, sp_rot_new = context_model.evaluate(
                 model, sp_pos, sp_rot, seq_slice,
-                indices, mean, std, atten_mask, post_process=False,midway_targets=midway,geo=geo,inter_x_zs = inter_x_zs)
+                indices, mean, std, atten_mask, post_process=False,midway_targets=midway,geo=geo,inter_x_zs = None)
         else:
             sp_pos_new, sp_rot_new = context_model.evaluate(
                 model, sp_pos, sp_rot, seq_slice,
-                indices, mean, std, atten_mask, post_process=False,geo=geo,inter_x_zs = inter_x_zs)
+                indices, mean, std, atten_mask, post_process=False,geo=geo,inter_x_zs = None)
         parents=[]
         # NOTICE:evaluate的结果包含geo的长度,rot_9d
         assert sp_pos.shape[1]+SEQNUM_GEO==sp_pos_new.shape[1]
@@ -254,7 +254,7 @@ if __name__ == "__main__":
         pos_new=sp_pos_new[:,res_slice]
         rot_new=sp_rot_new[:,res_slice]
         assert pos_new.shape[1]==sparse_trans+2
-            
+        print((positions==tmp_pos).all())
         # restore vacant teeth
         print(remove_len)
         for j in range(remove_len):
@@ -300,12 +300,12 @@ if __name__ == "__main__":
         datapath,name=os.path.split(file_name)
         basename,exp=os.path.splitext(name)
         tmp_removeidx=[int(kk) for kk in remove_idx[0]]
-        json_path_gt = "./res1121_slerpinit/{}_{}_{}_sp{}_dense{}_gt.json".format(
+        json_path_gt = "./res1127_space/{}_{}_{}_sp{}_dense{}_gt.json".format(
             args.config, args.dataset, basename,sparse_trans,dense_trans)
         visualization.save_data_to_json_tooth(
             json_path_gt, positions[0], quat[0],gpos_batch_loss[0], gquat_batch_loss[0],sparse_trans,dense_trans,remove_idx=tmp_removeidx)
 
-        json_path = "./res1121_slerpinit/{}_{}_{}_sp{}_dense{}.json".format(
+        json_path = "./res1127_space/{}_{}_{}_sp{}_dense{}.json".format(
             args.config, args.dataset, basename,sparse_trans,dense_trans)
         visualization.save_data_to_json_tooth(
             json_path, pos_new[0], quat_new[0],gpos_batch_loss[0], gquat_batch_loss[0],sparse_trans,dense_trans,remove_idx=tmp_removeidx)
