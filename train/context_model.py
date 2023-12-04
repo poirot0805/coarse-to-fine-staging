@@ -507,8 +507,8 @@ def train(config):
                 c_out[..., seq_slice, :] = torch.sigmoid(
                     model_out[..., seq_slice, c_slice]) 
             y = x_gt_zscore.clone().detach()    # BUG:x_gt是含有joint
-            tmp_out = model_out[..., seq_slice, :]
-            y[..., seq_slice, :,:] = tmp_out.reshape((*tmp_out.shape[:-1],28,9))
+            #tmp_out = model_out[..., seq_slice, :]
+            y[..., seq_slice, :,:] = model_out[..., seq_slice, :,:]#tmp_out.reshape((*tmp_out.shape[:-1],28,9))
 
 
             if zscore_MODE!="no":#FIXME
@@ -659,7 +659,7 @@ def train(config):
                         # save min loss checkpoint
                         train_utils.save_checkpoint(
                             config, model, epoch, iteration,
-                            optimizer, scheduler, suffix=".min")
+                            optimizer, scheduler, suffix=f".{iteration}min")
                 if iteration % (eval_interval*10)==0:
                     for i in range(len(val_dataloaders)):
                             ds_name = "val"
@@ -946,8 +946,8 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         y = x_zscore.clone().detach()
         #y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
 
-        tmp_out = model_out[..., seq_slice, :]
-        y[..., seq_slice, :,:] = tmp_out.reshape((*tmp_out.shape[:-1],28,9))
+        #tmp_out = model_out[..., seq_slice, :]
+        y[..., seq_slice, :,:] = model_out[..., seq_slice, :,:]#tmp_out.reshape((*tmp_out.shape[:-1],28,9))
 
         if post_process:
             y = train_utils.anim_post_process(y, x_zscore, seq_slice)

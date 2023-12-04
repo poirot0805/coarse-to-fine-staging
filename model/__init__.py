@@ -15,7 +15,21 @@ class STTransformer(nn.Module):
         self.dropout = config["dropout"]
         self.pre_lnorm = config["pre_lnorm"]
         self.n_layer = config["n_layer"]
-        self.n_splayer = config["n_splayer"]
+
+        """
+        "d_encoder_in":10,
+        "d_encoder_h":16,
+        "d_model":16,
+        "d_decoder_h":16,
+        "d_out":9,
+        "d_pff_inner":16
+        encoder:(b,f,n,10)->16->(b,f,n,16) (448)
+        sp_atten (bf,n,16)->(bf,n,16)
+        time_atten (bn,f,16)->(bn,f,16)
+        ffn (bn,f,16)->(bn,f,16) -> (b,f,n,16)
+        
+        decoder:(b,f,n,16)->16->(b,f,n,9)
+        """
         # decoder - >temporal:24*28->512->280
         self.encoder = nn.Sequential(
             nn.Linear(self.config["d_encoder_in"], self.config["d_encoder_h"]),
@@ -38,31 +52,22 @@ class STTransformer(nn.Module):
             nn.Dropout(self.dropout)
         )
         self.layer_norm = nn.LayerNorm(self.config["d_model"])
-        self.Spatial_norm=nn.LayerNorm(self.config["d_model_sp"])   # spatial layer norm
+        self.Spatial_norm=nn.LayerNorm(self.config["d_model"])   # spatial layer norm
 
         self.att_layers = nn.ModuleList()
         self.pff_layers = nn.ModuleList()
         self.sp_att_layers = nn.ModuleList()
-        self.sp_pff_layers = nn.ModuleList()
-        for i in range(self.n_splayer):        
+
+        
+        for i in range(self.n_layer):
             self.sp_att_layers.append(
                 transformer.SPMultiHeadedAttention(
-                    self.config["n_head_sp"], self.config["d_model_sp"],
+                    self.config["n_head_sp"], self.config["d_model"],
                     self.config["d_head_sp"], dropout=self.config["dropout"],
                     pre_lnorm=self.config["pre_lnorm"],
                     bias=self.config["atten_bias"]
                 )
             )
-
-            self.sp_pff_layers.append(
-                transformer.PositionwiseFeedForward(
-                    self.config["d_model_sp"], self.config["d_pff_inner_sp"],
-                    dropout=self.config["dropout"],
-                    pre_lnorm=self.config["pre_lnorm"]
-                )
-            )
-            
-        for i in range(self.n_layer):
             self.att_layers.append(
                 transformer.AlibiMultiHeadedAttention(
                     self.config["n_head"], self.config["d_model"],
@@ -99,16 +104,19 @@ class STTransformer(nn.Module):
         return x
 
     def forward(self, x, keyframe_pos, mask=None,sp_mask=None):
-        x = x.permute(0, 3, 1, 2)
-        b, _, _, p = x.shape
+        b, f, j, c = x.shape
         ### now x is [batch_size, 2 channels, receptive frames, joint_num], following image data
-        x = self.Spatial_forward_features(x,sp_mask)    # (b,seq,280)
         x = self.encoder(x)
         if self.add_kf:
             x = x + self.keyframe_pos_layer(keyframe_pos)
         for i in range(self.n_layer):
+            x = rearrange(x, 'b f j c  -> (b f) j  c', )
+            x = self.sp_att_layers[i](x,mask=sp_mask)
+            x = rearrange(x, '(b f) j  c  -> b f j c', f=f)
+            x = rearrange(x, 'b f j c  -> (b j) f  c', )
             x = self.att_layers[i](x, mask=mask)
             x = self.pff_layers[i](x)
+            x = rearrange(x, '(b j) f  c  -> b f j c', j=j)
 
         x = self.layer_norm(x)
         x = self.decoder(x)
