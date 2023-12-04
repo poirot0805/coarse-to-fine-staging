@@ -228,7 +228,7 @@ class SPMultiHeadedAttention(nn.Module):
                 Add bias to q, k, v and output projections. Defaults to False.
 
         """
-        super(AlibiMultiHeadedAttention, self).__init__()
+        super(SPMultiHeadedAttention, self).__init__()
 
         self.n_head = n_head
         self.d_model = d_model
