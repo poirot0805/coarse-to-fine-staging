@@ -83,6 +83,8 @@ class AlibiPositionalBias(nn.Module):
         i_arange = torch.arange(256, device = device)
         j_arange = torch.arange(256, device = device)
         bias = -(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
+        bias[...,:,:12]=0 # new
+        bias[...,:12,:]=0   # new
         return bias
 
     @staticmethod
@@ -271,6 +273,7 @@ class SPMultiHeadedAttention(nn.Module):
             combined = self.layer_norm(combined)
 
         # shape: (batch, q/k/v_len, dim)
+        print(hidden.shape)
         q = self.q_linear(hidden)
         k = self.k_linear(combined)
         v = self.v_linear(combined)
@@ -372,6 +375,7 @@ class AlibiMultiHeadedAttention(nn.Module):
             combined = self.layer_norm(combined)
 
         # shape: (batch, q/k/v_len, dim)
+        print(hidden.shape)
         q = self.q_linear(hidden)
         k = self.k_linear(combined)
         v = self.v_linear(combined)
