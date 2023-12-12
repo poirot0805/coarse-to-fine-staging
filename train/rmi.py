@@ -7,11 +7,11 @@ import numpy as np
 import torch
 from torch.optim import Adam
 
-from motion_inbetween_space import benchmark
-from motion_inbetween_space.data import utils_torch as data_utils
-from motion_inbetween_space.train import utils as train_utils
+from motion_inbetween_pred import benchmark
+from motion_inbetween_pred.data import utils_torch as data_utils
+from motion_inbetween_pred.train import utils as train_utils
 
-from motion_inbetween_space.model.rmi import (
+from motion_inbetween_pred.model.rmi import (
     RmiMotionDiscriminator, RmiMotionGenerator,
     TargetNoiseEmbedding, TimeToArrivalEmbedding
 )

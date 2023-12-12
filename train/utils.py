@@ -7,8 +7,8 @@ from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import LambdaLR
 import sys
 sys.path.append(r"/home/mjy/1126Teeth/packages")
-from motion_inbetween_space.data import loader
-from motion_inbetween_space.data import utils_torch as data_utils
+from motion_inbetween_pred.data import loader
+from motion_inbetween_pred.data import utils_torch as data_utils
 
 
 def load_checkpoint(config, model, optimizer=None, scheduler=None, suffix=""):
@@ -85,8 +85,8 @@ def get_val_datasets(config, device,trans_list,shuffle=False, dtype=torch.float3
     dataset_loaders = []
     datasets = []
     for trans in trans_list:
-        dataset = loader.ValToothDataSet(bvh_folder=config["datasets"]["benchmark"]["bvh_folder"],  window=trans+2, offset=1,
-                 start_frame=0, fill_mode="vacant-mean",device=device, dtype=dtype,add_geo=add_geo)
+        dataset = loader.ValToothDataSet(bvh_folder=config["datasets"]["benchmark"]["bvh_folder"],  window=192, offset=1,
+                 start_frame=trans, fill_mode="vacant-mean",device=device, dtype=dtype,add_geo=add_geo)
         print("{} clips in val-dataset.".format(len(dataset)))
         data_loader = DataLoader(dataset, batch_size=config["train"]["batch_size"],shuffle=shuffle)
         datasets.append(dataset)
@@ -114,7 +114,7 @@ def cal_r_loss(x, y, seq_slice, indices, weights=None):
     if weights is not None:
         delta = delta * weights[..., None]
     return torch.mean(torch.abs(delta))
-def cal_r_loss_sp(x, y, seq_slice, indices, weights=None):
+def cal_r_loss_sp(x, y, seq_slice_list, indices, weights=None):
     # dim_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
     # x = x.flatten(start_dim=-2)
     # # l1 loss
@@ -122,12 +122,16 @@ def cal_r_loss_sp(x, y, seq_slice, indices, weights=None):
     # if weights is not None:
     #     delta = delta * weights[..., None]
     dim_slice = slice(0,6)
-
+    res_list=[]
     # l1 loss
-    delta = x[..., seq_slice,:, dim_slice] - y[..., seq_slice, :,dim_slice]
-    if weights is not None:
-        delta = delta * weights[..., None]
-    return torch.mean(torch.abs(delta))
+    for i in len(seq_slice_list):
+        seq_slice = seq_slice_list[i]
+        delta = x[i, seq_slice,:, dim_slice] - y[i, seq_slice, :,dim_slice]
+        if weights is not None:
+            delta = delta * weights[..., None]
+        res_list.append(delta.flatten())
+    res = torch.cat(res_list)
+    return torch.mean(torch.abs(res))
 
 
 def cal_c_loss(c_gt, c_out, seq_slice, weights=None):
@@ -138,18 +142,22 @@ def cal_c_loss(c_gt, c_out, seq_slice, weights=None):
     return torch.mean(torch.abs(delta))
 
 
-def cal_smooth_loss(new_global_positions, seq_slice, weights=None):
-    seq_slice1 = slice(seq_slice.start, seq_slice.stop + 1)
-    seq_slice2 = slice(seq_slice.start - 1, seq_slice.stop)
+def cal_smooth_loss(new_global_positions, seq_slice_list, weights=None):
+    res_list=[]
+    for i in len(seq_slice_list):
+        seq_slice= seq_slice_list[i]
+        seq_slice1 = slice(seq_slice.start, seq_slice.stop + 1)
+        seq_slice2 = slice(seq_slice.start - 1, seq_slice.stop)
 
-    # l1 loss
-    delta = (new_global_positions[..., seq_slice1, :, :] -
-             new_global_positions[..., seq_slice2, :, :])
+        # l1 loss
+        delta = (new_global_positions[i, seq_slice1, :, :] -
+                new_global_positions[i, seq_slice2, :, :])
 
-    if weights is not None:
-        delta = delta * weights[..., None, None]
-
-    return torch.mean(torch.abs(delta))
+        if weights is not None:
+            delta = delta * weights[..., None, None]
+        res_list.append(delta.flatten())
+    res = torch.cat(res_list)
+    return torch.mean(torch.abs(res))
 
 
 def cal_smooth_loss2(new_global_positions, seq_slice, weights=None):
@@ -165,16 +173,19 @@ def cal_smooth_loss2(new_global_positions, seq_slice, weights=None):
 
     return torch.mean(torch.abs(delta))
 
-def cal_p_loss(global_positions, new_global_positions, seq_slice,
+def cal_p_loss(global_positions, new_global_positions, seq_slice_list,
                weights=None):
-
-    # l1 loss
-    delta = (global_positions[..., seq_slice, :, :] -
-             new_global_positions[..., seq_slice, :, :])
-    if weights is not None:
-        delta = delta * weights[..., None, None]
-
-    return torch.mean(torch.abs(delta))
+    res_list=[]
+    for i in len(seq_slice_list):
+        seq_slice= seq_slice_list[i]
+        # l1 loss
+        delta = (global_positions[i, seq_slice, :, :] -
+                new_global_positions[i, seq_slice, :, :])
+        if weights is not None:
+            delta = delta * weights[..., None, None]
+        res_list.append(delta.flatten())
+    res = torch.cat(res_list)
+    return torch.mean(torch.abs(res))
 
 
 def cal_f_loss(x, y, seq_slice, indices, weights=None):

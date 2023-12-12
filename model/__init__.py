@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 from einops import rearrange
-from motion_inbetween_space.model import transformer
+from motion_inbetween_pred.model import transformer
 class STTransformer(nn.Module):
     def __init__(self, config):
         super(STTransformer, self).__init__()
@@ -44,6 +44,7 @@ class STTransformer(nn.Module):
             nn.PReLU(),
             nn.Linear(self.config["d_decoder_h"], self.config["d_out"])
         )
+        self.reg_layer = nn.Linear(self.config["d_out"]*28, 1)
         self.keyframe_pos_layer = nn.Sequential(
             nn.Linear(2, self.config["d_model"]),
             nn.PReLU(),
@@ -120,8 +121,8 @@ class STTransformer(nn.Module):
 
         x = self.layer_norm(x)
         x = self.decoder(x)
-
-        return x
+        pred_n = self.reg_layer(x[:,12,:,:].flatten(start_dim=-2))
+        return x,pred_n.view(-1)
 
 # add Alibi version
 class ContextTransformer(nn.Module):

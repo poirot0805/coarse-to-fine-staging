@@ -7,13 +7,14 @@ import math
 import torch
 from torch.optim import Adam
 
-from motion_inbetween_space import benchmark
-from motion_inbetween_space.model import STTransformer
-from motion_inbetween_space.data import utils_torch as data_utils
-from motion_inbetween_space.train import rmi
-from motion_inbetween_space.train import utils as train_utils
+from motion_inbetween_pred import benchmark
+from motion_inbetween_pred.model import STTransformer
+from motion_inbetween_pred.data import utils_torch as data_utils
+from motion_inbetween_pred.train import rmi
+from motion_inbetween_pred.train import utils as train_utils
 
-SEQNUM_GEO=12
+SEQNUM_GEO=13
+LENGTH_TOKEN =1
 ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
 INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
@@ -132,10 +133,10 @@ def get_midway_targets(seq_slice, midway_targets_amount, midway_targets_p):
     return list(targets)
 
 
-def get_attention_mask(window_len, context_len, target_idx, device,
+def get_attention_mask(batch, window_len, context_len, target_idx, device,
                        midway_targets=()):
     global ATTENTION_MODE
-    atten_mask = torch.ones(window_len, window_len,
+    atten_mask = torch.ones(batch, window_len, window_len,
                             device=device, dtype=torch.bool)
     # old-1:遮住未知项
     if ATTENTION_MODE=="VANILLA":
@@ -153,11 +154,13 @@ def get_attention_mask(window_len, context_len, target_idx, device,
     
     # old-2:全部不遮罩,常用模式
     if ATTENTION_MODE=="NOMASK":
-        atten_mask[:, :target_idx + 1] = False
+        for i in range(batch):
+            atten_mask[i,:, :target_idx[i] + 1] = False
+        #atten_mask[:, :target_idx + 1] = False
     if ATTENTION_MODE=="SQUARE":
         atten_mask[:target_idx + 1, :target_idx + 1] = False
     # assert context_len==13
-    atten_mask = atten_mask.unsqueeze(0)
+    #atten_mask = atten_mask.unsqueeze(0)
 
     # (1, seq, seq)
     return atten_mask
@@ -187,20 +190,21 @@ def get_data_mask(window_len, d_mask, constrained_slices,
     # (seq, d_mask)
     return data_mask
 
-def get_data_mask_sp(window_len, d_mask, constrained_slices,
+def get_data_mask_sp(batch,window_len, d_mask, constrained_slices,
                   context_len, target_idx, device, dtype,
                   midway_targets=()):
     # 0 for unknown and 1 for known
     # print("get_data_mask_constraint:{}".format(constrained_slices))
-    data_mask = torch.zeros((window_len, 28,d_mask), device=device, dtype=dtype)
-    data_mask[:context_len,:, :] = 1
-    data_mask[target_idx, :,:] = 1
+    data_mask = torch.zeros((batch, window_len, 28,d_mask), device=device, dtype=dtype)
+    data_mask[:,:context_len,:, :] = 1
+    for i in range(batch):
+        data_mask[i,target_idx[i], :,:] = 1
     # NOTICE: 可以设置config中的d_mask和constrained_slice来固定特定牙齿位置
     for s in constrained_slices:
         # print("get_data_mask:{}".format(s))
-        data_mask[midway_targets,:, s] = 1
+        data_mask[:,midway_targets,:, s] = 1
 
-    # (seq, d_mask)
+    # (b,seq, d_mask)
     return data_mask
 def get_keyframe_pos_indices(window_len, seq_slice, dtype, device):
     # position index relative to context and target frame
@@ -242,38 +246,41 @@ def set_placeholder_root_pos(x, seq_slice, midway_targets, p_slice,r_slice=None)
         )
 
     return x
-def set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice):
+def set_placeholder_root_pos_sp(x, seq_slice_list, midway_targets, p_slice):
     # set root position of missing part to linear interpolation of
     # root position between constrained frames (i.e. last context frame,
     # midway target frames and target frame).
     p_slice = slice(6,9)
-    constrained_frames = [seq_slice.start - 1, seq_slice.stop]
-    constrained_frames.extend(midway_targets)
-    constrained_frames.sort()
-    for i in range(len(constrained_frames) - 1):
-        start_idx = constrained_frames[i]
-        end_idx = constrained_frames[i + 1]
-        start_slice = slice(start_idx, start_idx + 1)
-        end_slice = slice(end_idx, end_idx + 1)
-        inbetween_slice = slice(start_idx + 1, end_idx)
+    for j in len(seq_slice_list):
+        seq_slice = seq_slice_list[j]
+        constrained_frames = [seq_slice.start - 1, seq_slice.stop]
+        constrained_frames.extend(midway_targets)
+        constrained_frames.sort()
+        for i in range(len(constrained_frames) - 1):
+            start_idx = constrained_frames[i]
+            end_idx = constrained_frames[i + 1]
+            start_slice = slice(start_idx, start_idx + 1)
+            end_slice = slice(end_idx, end_idx + 1)
+            inbetween_slice = slice(start_idx + 1, end_idx)
 
-        x[..., inbetween_slice,:, p_slice] = \
-            benchmark.get_linear_interpolation2(
-                x[..., start_slice,:, p_slice],
-                x[..., end_slice,:,p_slice],
-                end_idx - start_idx - 1
-        )
+            x[j:j+1, inbetween_slice,:, p_slice] = \
+                benchmark.get_linear_interpolation2(
+                    x[j:j+1, start_slice,:, p_slice],
+                    x[j:j+1, end_slice,:,p_slice],
+                    end_idx - start_idx - 1
+            )
     return x
 def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
     global SEQNUM_GEO
+    global LENGTH_TOKEN
     constrained_frames = [seq_slice.start - 1, seq_slice.stop]
     constrained_frames.extend(midway_targets)
     constrained_frames.sort()
     inter_pos = pos.clone()
     inter_rot9d = rot9d.clone()
     for i in range(len(constrained_frames) - 1):
-        start_idx = constrained_frames[i]-SEQNUM_GEO
-        end_idx = constrained_frames[i + 1]-SEQNUM_GEO
+        start_idx = constrained_frames[i]-SEQNUM_GEO-LENGTH_TOKEN
+        end_idx = constrained_frames[i + 1]-SEQNUM_GEO-LENGTH_TOKEN
         start_slice = slice(start_idx, start_idx + 1)
         end_slice = slice(end_idx, end_idx + 1)
         inbetween_slice = slice(start_idx, end_idx+1)
@@ -321,6 +328,7 @@ def train(config):
     global ATTENTION_MODE
     global INIT_INTERP
     global SEQNUM_GEO
+    global LENGTH_TOKEN
     global zscore_MODE
     global Data_Mask_MODE
     ATTENTION_MODE = config["train"]["attention_mode"]
@@ -373,8 +381,8 @@ def train(config):
         SEQNUM_GEO = 12
     else:
         SEQNUM_GEO = 0
-    window_len = config["datasets"]["train"]["window"] + SEQNUM_GEO
-    context_len = config["train"]["context_len"] + SEQNUM_GEO
+    window_len = config["datasets"]["train"]["window"] # + SEQNUM_GEO
+    context_len = config["train"]["context_len"] + SEQNUM_GEO + LENGTH_TOKEN
     fill_mode = config["datasets"]["train"]["fill_mode"]
     fill_value = torch.zeros(mean.shape,dtype=dtype,device=device)
     if fill_mode=="missing-mean" or fill_mode=="vacant-mean":
@@ -390,25 +398,35 @@ def train(config):
     p_loss_avg = 0
     r_loss_avg = 0
     smooth_loss_avg = 0
+    reg_loss_avg=0
     c_loss_avg = 0
     f_loss_avg = 0
 
     min_benchmark_loss = float("inf")
+    min_val_loss = float("inf")
     inter_pos,inter_rot9d,inter_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
-            (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+            (positions, rotations, names, frame_nums, init_n, trends, geo, remove_idx, data_idx) = data 
             # trans
-            min_trans = min(frame_nums)-2
-            prob =random.uniform(0,1)
-            trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
-            trans_len = max_trans if trans_len>max_trans else trans_len
-            target_idx = context_len + trans_len
-            seq_slice = slice(context_len, target_idx)
-            
-            # get random midway target frames
+            #min_trans = min(frame_nums)-2
+            # prob =random.uniform(0,1)
+            # trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
+            # trans_len = max_trans if trans_len>max_trans else trans_len
+            seq_slice_list=[]
+            gt_seq_slice_list=[]
+            for j in range(init_n.shape[0]):
+                target_idx = context_len+init_n[j]-2
+                seq_slice = slice(context_len, target_idx)
+                seq_slice_list.append(seq_slice)
+                target_idx = context_len+frame_nums[j]-2
+                seq_slice = slice(context_len, target_idx)
+                gt_seq_slice_list.append(seq_slice)
+            common_seq_slice = seq_slice(context_len, context_len+min(init_n)-2)
+            # get random midway target frames 
+            # HACK:
             midway_targets = get_midway_targets(
-                seq_slice, midway_targets_amount, midway_targets_p)
+                common_seq_slice, midway_targets_amount, midway_targets_p)
             if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice, midway_targets)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
@@ -455,60 +473,67 @@ def train(config):
             #     trans_len = max_trans_
             # else:
             #     trans_len = random.randint(min_trans, max_trans_)
-
-            # attention mask
+            target_idx_list = [context_len + init_n[j]-2 for j in range(init_n.shape[0])]
+            gt_target_idx_list =[context_len + frame_nums[j]-2 for j in range(init_n.shape[0])]
+            # attention mask # HACK:
             atten_mask = get_attention_mask(
-                window_len, context_len, target_idx, device,
+                positions.shape[0], window_len, context_len, target_idx_list, device,
                 midway_targets=midway_targets)
             
             # data mask
             data_mask = get_data_mask_sp(
-                window_len, model.d_mask, model.constrained_slices,
-                context_len, target_idx, device, dtype, midway_targets)#FIXME
+                positions.shape[0], window_len, model.d_mask, model.constrained_slices,
+                context_len, target_idx_list, device, dtype)# HACK:
 
             # position index relative to context and target frame
-            keyframe_pos_idx = get_keyframe_pos_indices(
-                window_len, seq_slice, dtype, device)
+            # keyframe_pos_idx = get_keyframe_pos_indices(
+            #     window_len, seq_slice, dtype, device)
 
             # prepare model input
             x_gt = get_model_input_sp(positions, rot_6d)#FIXME
             x_gt_zscore = (x_gt - mean) / std
+            cls_token = init_n.expand(positions.shape[0],1,28,9)
             if add_geo_FLAG:
                 geo_ctrl = geo#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)#FIXME
                 if zscore_MODE=="seq":
                     x_gt_ = (x_gt - mean) / std
-                    x_gt_zscore = torch.cat([geo_ctrl,x_gt_],dim=1)
-                x_gt = torch.cat([geo_ctrl,x_gt],dim=1)    # GEO: (BATCH,SEQ*,DIMS)
+                    x_gt_zscore = torch.cat([geo_ctrl,cls_token,x_gt_],dim=1)
+                x_gt = torch.cat([geo_ctrl,cls_token,x_gt],dim=1)    # GEO: (BATCH,SEQ*,DIMS)
             
             if zscore_MODE=="normal":
                 x_gt_zscore = (x_gt - mean) / std
             elif zscore_MODE=="no":
                 x_gt_zscore = x_gt
-            x = None
-            if Data_Mask_MODE==0:
-                x = x_gt_zscore * data_mask[...,:1]
-            else:
-                x = torch.cat([
-                    x_gt_zscore * data_mask[...,:1],
-                    data_mask.expand(*x_gt_zscore.shape[:-1], data_mask.shape[-1])
-                ], dim=-1)
-            if Data_Mask_MODE==2:
-                x[...,:12,-1]=2
-            x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
+            x = x_gt_zscore.clone()
+            # if Data_Mask_MODE==0:
+            #     x = x_gt_zscore * data_mask[...,:1]
+            # else:
+            #     x = torch.cat([
+            #         x_gt_zscore * data_mask[...,:1],
+            #         data_mask.expand(*x_gt_zscore.shape[:-1], data_mask.shape[-1])
+            #     ], dim=-1)
+            # if Data_Mask_MODE==2:
+            #     x[...,:12,-1]=2
+            for j in range(x_gt_zscore.shape[0]):
+                x[j,target_idx_list[j]]=x_gt_zscore[j,gt_target_idx_list[j]]
+            x = torch.cat([x * data_mask[...,:1],data_mask], dim=-1)
+            x = set_placeholder_root_pos_sp(x, seq_slice_list, midway_targets, p_slice)#FIXME
             if INIT_INTERP!="POS-ONLY":
                 x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
             # calculate model output y
             optimizer.zero_grad()
             model.train()
 
-            model_out = model(x, keyframe_pos_idx, mask=atten_mask)
-            if config["train"]["trends_loss"]:
-                c_out = trends.clone().detach()
-                c_out[..., seq_slice, :] = torch.sigmoid(
-                    model_out[..., seq_slice, c_slice]) 
+            model_out,pred_n = model(x,None, mask=atten_mask)
+            # if config["train"]["trends_loss"]:
+            #     c_out = trends.clone().detach()
+            #     c_out[..., seq_slice, :] = torch.sigmoid(
+            #         model_out[..., seq_slice, c_slice]) 
             y = x_gt_zscore.clone().detach()    # BUG:x_gt是含有joint
             #tmp_out = model_out[..., seq_slice, :]
-            y[..., seq_slice, :,:] = model_out[..., seq_slice, :,:]#tmp_out.reshape((*tmp_out.shape[:-1],28,9))
+            for j in len(gt_seq_slice_list):
+                seq_slice=gt_seq_slice_list[j]
+                y[j, seq_slice, :,:] = model_out[j, seq_slice, :,:]#tmp_out.reshape((*tmp_out.shape[:-1],28,9))
 
 
             if zscore_MODE!="no":#FIXME
@@ -516,11 +541,11 @@ def train(config):
             #y = get_model_input(y[...,6:],y[...,:6])
 
             if add_geo_FLAG:
-                positions = torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),
+                positions = torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO+LENGTH_TOKEN,*positions.shape[2:]],dtype=dtype,device=device),
                                         positions],
                                         dim=1
                                         ) # GEO
-                global_positions = torch.cat([torch.zeros([global_positions.shape[0],SEQNUM_GEO,*global_positions.shape[2:]],dtype=dtype,device=device),
+                global_positions = torch.cat([torch.zeros([global_positions.shape[0],SEQNUM_GEO+LENGTH_TOKEN,*global_positions.shape[2:]],dtype=dtype,device=device),
                                               global_positions],
                                              dim=1) # GEO
             pos_new = get_new_positions(positions, y)#train_utils.get_new_positions(positions, y, indices) # FIXED:似乎只考虑了root pos return (batch,seq,joint,3)
@@ -530,12 +555,12 @@ def train(config):
             foot_state=torch.cat([pos_new,rot_6d_new],dim=-1)  
             
             
-            r_loss = train_utils.cal_r_loss_sp(x_gt, y, seq_slice, indices)#FIXME
+            r_loss = train_utils.cal_r_loss_sp(x_gt, y, gt_seq_slice_list, indices)#FIXME
             # smooth_loss = train_utils.cal_smooth_loss(gpos_new, seq_slice)
-            smooth_loss = train_utils.cal_smooth_loss(pos_new, seq_slice)   # FIXME:rot要不要加进去
+            smooth_loss = train_utils.cal_smooth_loss(pos_new, gt_seq_slice_list)   # FIXME:rot要不要加进去
             # p_loss = train_utils.cal_p_loss(global_positions, gpos_new, seq_slice)
-            p_loss = train_utils.cal_p_loss(global_positions, pos_new, seq_slice)
-
+            p_loss = train_utils.cal_p_loss(global_positions, pos_new, gt_seq_slice_list)
+            reg_loss = torch.mean(torch.abs(pred_n-frame_nums))
             loss=None
             if config["train"]["trends_loss"]:
                 c_loss = train_utils.cal_c_loss(trends, c_out, seq_slice)
@@ -562,7 +587,8 @@ def train(config):
                 loss = (
                     config["weights"]["rw"] * r_loss +
                     config["weights"]["pw"] * p_loss +
-                    config["weights"]["sw"] * smooth_loss
+                    config["weights"]["sw"] * smooth_loss+
+                    config["weights"]["nw"] * reg_loss
                 )
                 loss.backward()
                 optimizer.step()
@@ -571,6 +597,7 @@ def train(config):
                 r_loss_avg += r_loss.item()
                 p_loss_avg += p_loss.item()
                 smooth_loss_avg += smooth_loss.item()
+                reg_loss_avg +=reg_loss.item()
 
             loss_avg += loss.item()
 
@@ -585,25 +612,29 @@ def train(config):
                 smooth_loss_avg /= info_interval
                 c_loss_avg /= info_interval
                 f_loss_avg /= info_interval
+                reg_loss_avg /=info_interval
                 loss_avg /= info_interval
                 lr = optimizer.param_groups[0]["lr"]
 
                 print("Epoch: {}, Iteration: {}, lr: {:.8f}, "
                       "loss: {:.6f}, r: {:.6f}, p: {:.6f}, "
-                      "smooth: {:.6f}, c: {:.6f}, f: {:.6f}".format(
+                      "smooth: {:.6f}, n: {:.6f}, f: {:.6f}".format(
                           epoch, iteration, lr, loss_avg,
-                          r_loss_avg, p_loss_avg, smooth_loss_avg,c_loss_avg, f_loss_avg))
+                          r_loss_avg, p_loss_avg, smooth_loss_avg,reg_loss_avg, f_loss_avg))
 
                 contents = [
                     ["loss", "r_loss", r_loss_avg],
                     ["loss", "p_loss", p_loss_avg],
                     ["loss", "smooth_loss", smooth_loss_avg],
+                    ["loss", "reg_loss", reg_loss_avg],
                     ["loss weighted", "r_loss",
                         r_loss_avg * config["weights"]["rw"]],
                     ["loss weighted", "p_loss",
                         p_loss_avg * config["weights"]["pw"]],
                     ["loss weighted", "smooth_loss",
                         smooth_loss_avg * config["weights"]["sw"]],
+                    ["loss weighted", "reg_loss",
+                        reg_loss_avg * config["weights"]["nw"]],
                     ["loss weighted", "loss", loss_avg],
                     ["learning rate", "lr", lr],
                     ["epoch", "epoch", epoch],
@@ -627,7 +658,7 @@ def train(config):
                             ds_name = bench_dataset_names[i]
                             ds_loader = bench_data_loaders[i]
 
-                            gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss = eval_on_dataset(
+                            gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss, val_regloss = eval_on_dataset(
                                 config, ds_loader, model, trans)
 
                             contents.extend([
@@ -641,10 +672,12 @@ def train(config):
                                  val_ploss],
                                 [ds_name, "val_s_{}".format(trans),
                                  val_smoothloss], 
+                                [ds_name, "val_reg_{}".format(trans),
+                                 val_regloss], 
                             ])
                             print("{}:\ngpos: {:6f}, gquat: {:6f}, "
-                                  "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}".format(ds_name, gpos_loss,
-                                                        gquat_loss, npss_loss,val_ploss,val_smoothloss))
+                                  "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}, reg_loss: {:.6f}".format(ds_name, gpos_loss,
+                                                        gquat_loss, npss_loss,val_ploss,val_regloss))
 
                             if ds_name == "benchmark":
                                 # After iterations, benchmark_loss will be the
@@ -652,7 +685,7 @@ def train(config):
                                 # with transition length equals to last value
                                 # in eval_interval.
                                 benchmark_loss = (gpos_loss + gquat_loss +
-                                                  npss_loss)
+                                                  npss_loss + val_regloss)
 
                     if min_benchmark_loss > benchmark_loss:
                         min_benchmark_loss = benchmark_loss
@@ -661,11 +694,12 @@ def train(config):
                             config, model, epoch, iteration,
                             optimizer, scheduler, suffix=f".{iteration}min")
                 if iteration % (eval_interval*10)==0:
+                    val_total_loss=0
                     for i in range(len(val_dataloaders)):
                             ds_name = "val"
                             ds_loader = val_dataloaders[i]
                             trans = ds_loader.dataset.window-2
-                            gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss = eval_on_dataset(
+                            gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss,val_regloss = eval_on_dataset(
                                 config, ds_loader, model, trans)
 
                             contents.extend([
@@ -679,15 +713,23 @@ def train(config):
                                  val_ploss],
                                 [ds_name, "val_s_{}".format(trans),
                                  val_smoothloss], 
+                                [ds_name, "val_reg_{}".format(trans),
+                                 val_regloss], 
                             ])
+                            val_total_loss+= (gpos_loss+gquat_loss+npss_loss+val_regloss)
                             print("{}-{}:\ngpos: {:6f}, gquat: {:6f}, "
                                   "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}".format(ds_name, trans, gpos_loss,
                                                         gquat_loss, npss_loss,val_ploss,val_smoothloss))
-                        
+                    if min_val_loss>val_total_loss:
+                        min_val_loss = val_total_loss
+                        train_utils.save_checkpoint(
+                            config, model, epoch, iteration,
+                            optimizer, scheduler, suffix=f".{iteration}val_min")    
                 train_utils.to_visdom(vis, info_idx, contents)
                 r_loss_avg = 0
                 p_loss_avg = 0
                 smooth_loss_avg = 0
+                reg_loss_avg=0
                 c_loss_avg = 0
                 f_loss_avg = 0
                 loss_avg = 0
@@ -706,14 +748,15 @@ def eval_on_dataset(config, data_loader, model, trans_len,
                     debug=False, post_process=False):
     global INIT_INTERP
     global SEQNUM_GEO
+    global LENGTH_TOKEN
     device = data_loader.dataset.device
     dtype = data_loader.dataset.dtype
-    window_len = data_loader.dataset.window + SEQNUM_GEO
+    window_len = data_loader.dataset.window
 
     indices = config["indices"]
-    context_len = config["train"]["context_len"] + SEQNUM_GEO
-    target_idx = context_len + trans_len
-    seq_slice = slice(context_len, target_idx)
+    context_len = config["train"]["context_len"] + SEQNUM_GEO + LENGTH_TOKEN
+    # target_idx = context_len + trans_len
+    # seq_slice = slice(context_len, target_idx)
 
     mean, std = get_train_stats_torch(config, dtype, device)
     mean_rmi, std_rmi = rmi.get_rmi_benchmark_stats_torch(
@@ -726,8 +769,8 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     fill_value_p,fill_value_r6d=fill_value[:,6:],fill_value[:,:6]#FIXME#from_flat_data_joint_data(fill_value) 
     
     # attention mask
-    atten_mask = get_attention_mask(
-        window_len, context_len, target_idx, device)
+    # atten_mask = get_attention_mask(
+    #     window_len, context_len, target_idx, device)
 
     data_indexes = []
     gpos_loss = []
@@ -737,11 +780,12 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
     p_loss_avg = []
     smooth_loss_avg = []
+    reg_loss_avg=[]
     add_geo_FLAG = config["train"]["add_geo"]
     if add_geo_FLAG==False:
         assert SEQNUM_GEO==0
     for i, data in enumerate(data_loader, 0):
-        (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data # FIXED:返回类型
+        (positions, rotations, names, frame_nums, init_n,trends, geo, remove_idx, data_idx) = data # FIXED:返回类型
         if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
@@ -774,26 +818,41 @@ def eval_on_dataset(config, data_loader, model, trans_len,
                 inter_x_zs = (inter_x - mean) / std
         # notice: rotations参与计算loss了
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
-        pos_new, rot_new = evaluate(
-            model, positions, rot_6d, seq_slice,
+        
+        seq_slice_list=[]
+        for j in range(init_n.shape[0]):
+            target_idx = context_len+init_n[j]-2
+            seq_slice = slice(context_len, target_idx)
+            seq_slice_list.append(seq_slice)
+        target_idx_list = [context_len + init_n[j]-2 for j in range(init_n.shape[0])]
+        atten_mask = get_attention_mask(
+                positions.shape[0], window_len, context_len, target_idx_list, device,
+                midway_targets=[])
+        pos_new, rot_new ,pred_n= evaluate(
+            model, positions, rot_6d, init_n,frame_nums,seq_slice_list,target_idx_list,
             indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None)
         if add_geo_FLAG:
-            positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
-            rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
-        
+            positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO+LENGTH_TOKEN,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
+            rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO+LENGTH_TOKEN,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
+        pred_idx_list=[context_len + pred_n.int()[j]-2 for j in range(init_n.shape[0])]
         (gpos_batch_loss, gquat_batch_loss,
          npss_batch_loss, npss_batch_weights,_,_) = \
             benchmark.get_rmi_style_batch_loss(
                 positions, rotations, pos_new, rot_new, None,
-                context_len, target_idx, mean_rmi, std_rmi
+                context_len, pred_idx_list, mean_rmi, std_rmi
         )   # FIXED:rmi定义的损失计算
             
-
-        smooth_loss = train_utils.cal_smooth_loss(pos_new, seq_slice)   # FIXME:rot要不要加进去
-        p_loss = train_utils.cal_p_loss(positions, pos_new, seq_slice)
-
+        pred_seq_slice_list=[]
+        for j in range(init_n.shape[0]):
+            target_idx = context_len+pred_n.int()[j]-2
+            seq_slice = slice(context_len, target_idx)
+            pred_seq_slice_list.append(seq_slice)
+        smooth_loss = train_utils.cal_smooth_loss(pos_new, pred_seq_slice_list)   # FIXME:rot要不要加进去
+        p_loss = train_utils.cal_p_loss(positions, pos_new, pred_seq_slice_list)
+        reg_loss = torch.mean(torch.abs(pred_n-frame_nums))*0.01
         p_loss_avg.append(p_loss.item())
         smooth_loss_avg.append(smooth_loss.item())
+        reg_loss_avg.append(reg_loss.item())
         
         gpos_loss.append(gpos_batch_loss)
         gquat_loss.append(gquat_batch_loss)
@@ -811,6 +870,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
     p_loss_avg = np.array(p_loss_avg)
     smooth_loss_avg = np.array(smooth_loss_avg)
+    reg_loss_avg=np.array(reg_loss_avg)
     if debug:
         total_loss = gpos_loss + gquat_loss + npss_loss
         loss_data = list(zip(
@@ -825,10 +885,10 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
         return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(), loss_data
     else:
-        return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(),p_loss_avg.mean(),smooth_loss_avg.mean()
+        return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(),p_loss_avg.mean(),smooth_loss_avg.mean(),reg_loss_avg.mean()
 
 
-def evaluate(model, positions, rotations, seq_slice, indices,
+def evaluate(model, positions, rotations,init_n,real_n, seq_slice_list, target_idx_list,indices,
              mean, std, atten_mask, post_process=False,
              midway_targets=(),geo=None,inter_x_zs=None):
     """
@@ -877,11 +937,13 @@ def evaluate(model, positions, rotations, seq_slice, indices,
     global Data_Mask_MODE
     global INIT_INTERP
     global SEQNUM_GEO
+    global LENGTH_TOKEN
     dtype = positions.dtype
     device = positions.device
-    window_len = positions.shape[-3]+SEQNUM_GEO if geo is not None else positions.shape[-3]
-    context_len = seq_slice.start
-    target_idx = seq_slice.stop
+    window_len = 192
+    context_len = 1 + SEQNUM_GEO + LENGTH_TOKEN
+    gt_target_idx_list =[context_len + real_n[j]-2 for j in range(init_n.shape[0])]
+
 
     rp_slice = slice(indices["r_start_idx"], indices["p_end_idx"])
     # If current context model is not trained with constrants,
@@ -906,49 +968,38 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         geo_ctrl=None
         x_orig = get_model_input_sp(positions, rotations)#FIXME
         x_zscore = (x_orig - mean) / std
+        cls_token = init_n.expand(positions.shape[0],1,28,9)
         if geo is not None:
             geo_ctrl=geo #FIXME#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
             if zscore_MODE=="seq":
                 x_ = (x_orig - mean) / std
-                x_zscore = torch.cat([geo_ctrl,x_],dim=1)
-            x_orig=torch.cat([geo_ctrl,x_orig],dim=1)    # GEO: (BATCH,SEQ*,DIMS)
+                x_zscore = torch.cat([geo_ctrl,cls_token,x_],dim=1)
+            x_orig=torch.cat([geo_ctrl,cls_token,x_orig],dim=1)    # GEO: (BATCH,SEQ*,DIMS)
         # zscore
         if zscore_MODE=="normal":
             x_zscore = (x_orig - mean) / std
         elif zscore_MODE=="no":
             x_zscore = x_orig
-
+        x = x_zscore.clone()
+        for j in range(x_zscore.shape[0]):
+                x[j,target_idx_list[j]]=x_zscore[j,gt_target_idx_list[j]]
         # data mask (seq, 1)
         data_mask = get_data_mask_sp(
-            window_len, model.d_mask, model.constrained_slices, context_len,
-            target_idx, device, dtype, midway_targets) #FIXME
-
-        keyframe_pos_idx = get_keyframe_pos_indices(
-            window_len, seq_slice, dtype, device)
-        x = None
-        if Data_Mask_MODE==0:
-            x = x_zscore * data_mask[...,:1]
-        else:
-            x = torch.cat([
-                x_zscore * data_mask[...,:1],
-                data_mask.expand(*x_zscore.shape[:-1], data_mask.shape[-1])
-            ], dim=-1)
-        if Data_Mask_MODE==2:
-            x[...,:SEQNUM_GEO,-1]=2
+            positions.shape[0],window_len, model.d_mask, model.constrained_slices, context_len,
+            target_idx_list, device, dtype, midway_targets) #FIXME
+        x = torch.cat([x * data_mask[...,:1],data_mask], dim=-1)
 
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
-        x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
+        x = set_placeholder_root_pos_sp(x, seq_slice_list, midway_targets, p_slice)#FIXME
         if INIT_INTERP!="POS-ONLY":
             x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
         # calculate model output y
-        model_out = model(x, keyframe_pos_idx, mask=atten_mask)
+        model_out,pred_n = model(x, None, mask=atten_mask)
         y = x_zscore.clone().detach()
-        #y[..., seq_slice, :] = model_out[..., seq_slice, rp_slice]
-
-        #tmp_out = model_out[..., seq_slice, :]
-        y[..., seq_slice, :,:] = model_out[..., seq_slice, :,:]#tmp_out.reshape((*tmp_out.shape[:-1],28,9))
-
+        for j in len(y.shape[0]):
+            seq_slice=slice(context_len,pred_n.int()[j])
+            y[j, seq_slice, :,:] = model_out[j, seq_slice, :,:]
         if post_process:
             y = train_utils.anim_post_process(y, x_zscore, seq_slice)
 
@@ -960,14 +1011,14 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         rotations = data_utils.matrix6D_to_9D_torch(rotations)
         # GEO:
         if geo is not None:
-            positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
-            rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
+            positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO+LENGTH_TOKEN,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
+            rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO+LENGTH_TOKEN,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
         # new pos and rot
-        pos_new = get_new_positions(positions,y,seq_slice)
-        rot_new = get_new_rotations(y,rotations,seq_slice)
+        pos_new = get_new_positions(positions,y)
+        rot_new = get_new_rotations(y,rotations)
         # pos_new = train_utils.get_new_positions(
         #     positions, y, indices, seq_slice)
         # rot_new = train_utils.get_new_rotations(
         #     y, indices, rotations, seq_slice)
 
-        return pos_new, rot_new
+        return pos_new, rot_new,pred_n

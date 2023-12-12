@@ -5,11 +5,11 @@ from torch.utils.data import Dataset
 import numpy as np
 import json
 
-from motion_inbetween_space.data import bvh, utils_np
+from motion_inbetween_pred.data import bvh, utils_np
 
 
 class BvhDataSet(Dataset):
-    def __init__(self, bvh_folder, actors, window=50, offset=1,
+    def __init__(self, bvh_folder, actors, window=192, offset=1,
                  start_frame=0, fill_mode="missing-zero",device="cpu", dtype=torch.float32,complete_flag=False, augment_flag=True,add_geo=True,inference_mode=False):
         """
         Bvh data set.
@@ -28,7 +28,7 @@ class BvhDataSet(Dataset):
         super(BvhDataSet, self).__init__()
         self.bvh_folder = bvh_folder
         self.actors = actors
-        self.window = window
+        self.window = window-13
         self.offset = offset
         self.start_frame = start_frame
         self.device = device
@@ -81,7 +81,7 @@ class BvhDataSet(Dataset):
         self.names=[]
         self.remove_list=[]
         current_id=0
-        
+        self.clip_num=0
         for dataset_path in self.bvh_folder:
             # load bvh files that match given actors
             for f in os.listdir(dataset_path):
@@ -108,57 +108,63 @@ class BvhDataSet(Dataset):
 
             anim = bvh.load_tooth_json(bvh_path, start=self.start_frame,remove_list=remove_list)
 
-            self.names.append(bvh_path)
+            self.names.append(bvh_path) # 1
             self.geo.append(self._to_tensor(geo))
             current_id+=1
 
-            self.positions.append(self._to_tensor(anim.positions))  # (seq,joint,3)
-            self.rotations.append(self._to_tensor(anim.rotations))  # (seq,joint,3,3)
+            self.positions.append(self._to_tensor(anim.positions))  # (seq,joint,3) #2
+            self.rotations.append(self._to_tensor(anim.rotations))  # (seq,joint,3,3) #3
 
-            self.remove_list.append(anim.missing_list)
-            self.frames.append(anim.positions.shape[0]) # real frame number
-            self.geoids.append(current_id-1)
+            self.remove_list.append(anim.missing_list)  #4
+            self.frames.append(anim.positions.shape[0]) # real frame number:5
+            self.geoids.append(current_id-1)#6
             
-            clip_cnt=anim.positions.shape[0] - self.window if anim.positions.shape[0] - self.window>0 else 0
+            clip_cnt=1 + anim.positions.shape[0]/5-4
             if self.inference_mode:
-                clip_cnt=0
-            
-            if clip_cnt==0:
-                self.extend_frames.append(self.window)
+                clip_cnt=1
+            self.clip_num+=clip_cnt
             # ADD:追加跨帧数据
-            if clip_cnt>0:
-                self.extend_frames.append(anim.step_num)
-                
-                """
-                self.extend_frames.append(anim.step_num)
-                if self.augment:
-                    for cross_step in range(2,6):
-                        if anim.step_num/cross_step<12: # NOTICE:原来是12，需要填补太多了
-                            break
-                        new_seq_id=slice(0,anim.step_num,cross_step)
-                        npos=self._to_tensor(anim.positions)[new_seq_id]
-                        nrot=self._to_tensor(anim.rotations)[new_seq_id]
-                        self.positions.append(npos)  # (seq,joint,3)
-                        self.rotations.append(nrot)  # (seq,joint,3,3)
-                        self.frames.append(npos.shape[0]) # real frame number
-                        self.remove_list.append(anim.missing_list)
-                        self.geoids.append(current_id-1)
-                        if npos.shape[0] - self.window>0:
-                            self.extend_frames.append(npos.shape[0])
-                        else:
-                            self.extend_frames.append(self.window)
-                """
+            if clip_cnt>1:
+                for i in range(25,anim.positions.shape[0],5):
+                    self.names.append(bvh_path) # 1
+                    self.positions.append(self._to_tensor(anim.positions[-i:]))  # (seq,joint,3) #2
+                    self.rotations.append(self._to_tensor(anim.rotations[-i:]))  # (seq,joint,3,3) #3
 
+                    self.remove_list.append(anim.missing_list)  #4
+                    self.frames.append(i) # real frame number:5
+                    self.geoids.append(current_id-1)#6
+
+    def cal_n(self,pos1,pos2):
+        def pos_len(x):
+            return torch.sqrt(torch.dot(x,x))
+        n_1 =[]
+        n_2=[]
+        n_3=[]
+        n_4=[]
+        for i in range(4,10):
+            y = pos_len(pos1[i],pos2[i])
+            n_1.append(y)
+        for i in range(0,4):
+            y = pos_len(pos1[i],pos2[i])
+            n_2.append(y)
+        for i in range(10,14):
+            y = pos_len(pos1[i],pos2[i])
+            n_2.append(y)
+        for i in range(18,24):
+            y = pos_len(pos1[i],pos2[i])
+            n_3.append(y)
+        for i in range(14,18):
+            y = pos_len(pos1[i],pos2[i])
+            n_4.append(y)
+        for i in range(24,28):
+            y = pos_len(pos1[i],pos2[i])
+            n_4.append(y)
+        return max(max(n_1)+max(n_2), max(n_3)+max(n_4))
     def __len__(self):
-        count = 0
-        # for frame in self.frames:
-        #     count += int(float(frame - self.window) / self.offset) + 1
-        # return count
         if self.inference_mode:
             return len(self.frames)
-        for frame in self.extend_frames:
-            count += int(float(frame - self.window) / self.offset) + 1
-        return count
+
+        return self.clip_num
 
     def __getitem__(self, idx):
         curr_idx = idx
@@ -228,57 +234,42 @@ class BvhDataSet(Dataset):
                 idx
             )
 
+        tmp_positions = self.positions[idx]
+        tmp_rotations = self.rotations[idx]
+        frame_num = self.frames[idx]
         
-        for i, frame in enumerate(self.extend_frames):
-            tmp_idx = curr_idx - \
-                int(float(frame - self.window) / self.offset) - 1
+        extend_length=self.window - frame_num
 
-            if tmp_idx >= 0:
-                curr_idx = tmp_idx
-                continue
-                         
-            start_idx = curr_idx * self.offset
-            end_idx = start_idx + self.window
-            frame_num=self.window
-            # print(idx, i, start_idx, end_idx)
-            if end_idx<=self.frames[i]:
-                positions = self.positions[i][start_idx: end_idx]
-                rotations = self.rotations[i][start_idx: end_idx]
-
-            else:
-                extend_length=end_idx-self.frames[i]
-                frame_num -= extend_length
-                end_idx=self.frames[i]
-                temp_positions = self.positions[i][start_idx: end_idx]
-                temp_rotations = self.rotations[i][start_idx: end_idx]
-                add_pos=self.positions[i][end_idx-1:end_idx]
-                add_rot=self.rotations[i][end_idx-1:end_idx]
-                positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
-                rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
-            # trends mask
-            zeros_shape = [1,28]
-            zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
-            b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
-            c=(rotations[1:,:,:]-rotations[:-1,:,:]!=0).flatten(start_dim=-2)
-            x=torch.any(b,dim=-1)
-            x2=torch.any(c,dim=-1)
-            temp_trend=torch.logical_or(x,x2)
-            trends=torch.cat([zeros,temp_trend],dim=0).type(self.dtype)
-            # trends=trends.unsqueeze(2)
-            # 1：move 0:static
-            geo_id=self.geoids[i]
-            remove_idx=torch.zeros(28,dtype=torch.bool,device=self.device)  # 0: not remove / 1: remove
-            for k in self.remove_list[i]:
+        add_pos=tmp_positions[-1:]
+        add_rot=tmp_rotations[-1:]
+        positions=torch.cat([tmp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
+        rotations=torch.cat([tmp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
+            # # trends mask
+            # zeros_shape = [1,28]
+            # zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
+            # b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
+            # c=(rotations[1:,:,:]-rotations[:-1,:,:]!=0).flatten(start_dim=-2)
+            # x=torch.any(b,dim=-1)
+            # x2=torch.any(c,dim=-1)
+            # temp_trend=torch.logical_or(x,x2)
+            # trends=torch.cat([zeros,temp_trend],dim=0).type(self.dtype)
+            # # trends=trends.unsqueeze(2)
+            # # 1：move 0:static
+        trends = positions.clone()
+        geo_id=self.geoids[idx]
+        remove_idx=torch.zeros(28,dtype=torch.bool,device=self.device)  # 0: not remove / 1: remove
+        for k in self.remove_list[idx]:
                 remove_idx[k]=True
-                
-            assert positions.shape[0]==self.window and positions.shape[2]==3
-            assert rotations.shape[0]==self.window and rotations.shape[2]==3
-            assert trends.shape[0]==self.window 
-            return (
+        init_n = self.cal_n(positions[0],positions[-1])
+        assert positions.shape[0]==self.window and positions.shape[2]==3
+        assert rotations.shape[0]==self.window and rotations.shape[2]==3
+        assert trends.shape[0]==self.window 
+        return (
                 positions,
                 rotations,
                 self.names[geo_id],
                 frame_num,
+                init_n,
                 trends,
                 self.geo[geo_id],
                 remove_idx,
@@ -287,8 +278,8 @@ class BvhDataSet(Dataset):
 
 
 class ValToothDataSet(Dataset):
-    def __init__(self, bvh_folder,  window=50, offset=1,
-                 start_frame=0, fill_mode="missing-zero",device="cpu", dtype=torch.float32,complete_flag=False, augment_flag=True,add_geo=True):
+    def __init__(self, bvh_folder,  window=192, offset=1,
+                 start_frame=25, fill_mode="missing-zero",device="cpu", dtype=torch.float32,complete_flag=False, augment_flag=True,add_geo=True):
         """
         Bvh data set.
 
@@ -305,7 +296,7 @@ class ValToothDataSet(Dataset):
         """
         super(ValToothDataSet, self).__init__()
         self.bvh_folder = bvh_folder
-        self.window = window
+        self.window = window-13
         self.offset = offset
         self.start_frame = start_frame
         self.device = device
@@ -348,6 +339,7 @@ class ValToothDataSet(Dataset):
         self.extend_frames = []
         self.names=[]
         self.remove_list=[]
+        self.clip_num=0
         current_id=0
         
         for dataset_path in self.bvh_folder:
@@ -375,7 +367,7 @@ class ValToothDataSet(Dataset):
             geo=bvh.load_feature_npy(basename,self.add_geo,remove_list=remove_list)  # 【28，seq，9】
 
             anim = bvh.load_tooth_json(bvh_path, start=self.start_frame,remove_list=remove_list)
-            if anim.step_num<self.window:
+            if anim.step_num<self.start_frame-5 or anim.step_num>self.start_frame+5:
                 continue
             self.names.append(bvh_path)
             self.geo.append(self._to_tensor(geo))
@@ -388,79 +380,53 @@ class ValToothDataSet(Dataset):
             self.frames.append(anim.positions.shape[0]) # real frame number
             self.geoids.append(current_id-1)
             
-            clip_cnt=anim.positions.shape[0] - self.window if anim.positions.shape[0] - self.window>0 else 0
-            
-            if clip_cnt==0:
-                self.extend_frames.append(self.window)
-            # ADD:追加跨帧数据
-            if clip_cnt>0:
-                self.extend_frames.append(anim.step_num)
+            self.clip_num+=1
                 
 
     def __len__(self):
         count = 0
-        # for frame in self.frames:
-        #     count += int(float(frame - self.window) / self.offset) + 1
-        # return count
 
-        for frame in self.extend_frames:
-            count += int(float(frame - self.window) / self.offset) + 1
-        return count
+        return self.clip_num
 
     def __getitem__(self, idx):
         curr_idx = idx
         # FIXED:具体如何取是在这里改的
+        tmp_positions = self.positions[idx]
+        tmp_rotations = self.rotations[idx]
+        frame_num = self.frames[idx]
         
-        for i, frame in enumerate(self.extend_frames):
-            tmp_idx = curr_idx - \
-                int(float(frame - self.window) / self.offset) - 1
+        extend_length=self.window - frame_num
 
-            if tmp_idx >= 0:
-                curr_idx = tmp_idx
-                continue
-                         
-            start_idx = curr_idx * self.offset
-            end_idx = start_idx + self.window
-            frame_num=self.window
-            # print(idx, i, start_idx, end_idx)
-            if end_idx<=self.frames[i]:
-                positions = self.positions[i][start_idx: end_idx]
-                rotations = self.rotations[i][start_idx: end_idx]
-
-            else:
-                extend_length=end_idx-self.frames[i]
-                frame_num -= extend_length
-                end_idx=self.frames[i]
-                temp_positions = self.positions[i][start_idx: end_idx]
-                temp_rotations = self.rotations[i][start_idx: end_idx]
-                add_pos=self.positions[i][end_idx-1:end_idx]
-                add_rot=self.rotations[i][end_idx-1:end_idx]
-                positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
-                rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
-            # trends mask
-            zeros_shape = [1,28]
-            zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
-            b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
-            c=(rotations[1:,:,:]-rotations[:-1,:,:]!=0).flatten(start_dim=-2)
-            x=torch.any(b,dim=-1)
-            x2=torch.any(c,dim=-1)
-            temp_trend=torch.logical_or(x,x2)
-            trends=torch.cat([zeros,temp_trend],dim=0).type(self.dtype)
-            # trends=trends.unsqueeze(2)
-            # 1：move 0:static
-            geo_id=self.geoids[i]
-            remove_idx=torch.zeros(28,dtype=torch.bool,device=self.device)  # 0: not remove / 1: remove
-            for k in self.remove_list[i]:
+        add_pos=tmp_positions[-1:]
+        add_rot=tmp_rotations[-1:]
+        positions=torch.cat([tmp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
+        rotations=torch.cat([tmp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
+            # # trends mask
+            # zeros_shape = [1,28]
+            # zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
+            # b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
+            # c=(rotations[1:,:,:]-rotations[:-1,:,:]!=0).flatten(start_dim=-2)
+            # x=torch.any(b,dim=-1)
+            # x2=torch.any(c,dim=-1)
+            # temp_trend=torch.logical_or(x,x2)
+            # trends=torch.cat([zeros,temp_trend],dim=0).type(self.dtype)
+            # # trends=trends.unsqueeze(2)
+            # # 1：move 0:static
+        trends = positions.clone()
+        geo_id=self.geoids[idx]
+        remove_idx=torch.zeros(28,dtype=torch.bool,device=self.device)  # 0: not remove / 1: remove
+        for k in self.remove_list[idx]:
                 remove_idx[k]=True
-                
-            assert positions.shape[0]==self.window and positions.shape[2]==3
-            assert rotations.shape[0]==self.window and rotations.shape[2]==3
-            assert trends.shape[0]==self.window 
-            return (
+        init_n = self.cal_n(positions[0],positions[-1])
+        assert positions.shape[0]==self.window and positions.shape[2]==3
+        assert rotations.shape[0]==self.window and rotations.shape[2]==3
+        assert trends.shape[0]==self.window 
+        return (
                 positions,
                 rotations,
                 self.names[geo_id],
                 frame_num,
+                init_n,
                 trends,
                 self.geo[geo_id],
                 remove_idx,

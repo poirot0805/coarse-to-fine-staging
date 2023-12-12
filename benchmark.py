@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 
-from motion_inbetween_space.data import utils_torch as data_utils
+from motion_inbetween_pred.data import utils_torch as data_utils
 
 
 """
@@ -90,60 +90,45 @@ def get_npss_loss_batch(gt_data, pred_data, eps=1e-8):
 
 
 def get_rmi_style_batch_loss(positions, rotations, pos_new, rot_new,
-                             parents, context_len, target_idx,
+                             parents, context_len, target_idx_list,
                              mean_rmi, std_rmi):
-    seq_slice = slice(context_len, target_idx)
+    res={
+        "gpos":[],"gquat":[],"npss":[],"npssw":[],"npss2":[],"npssw2":[]
+    }
+    for i in len(target_idx_list):
+        seq_slice = slice(context_len, target_idx_list[i])
 
-    # Convert to mean centered data in order to be compatible
-    # to Robust Motion Inbetween metrics.
+        gpos_zscore = (positions - mean_rmi) / std_rmi   # NOTICE:mean_rmi是怎么计算的？
+        gquat = data_utils.matrix9D_to_quat_torch(rotations)
+        gquat = data_utils.remove_quat_discontinuities(gquat)
+        # Predicted ------------------------------------------------------------
 
-    # Ground Truth ---------------------------------------------------------
-    '''
-    positions, rotations, root_pos_offset, root_rot_offset = \
-        data_utils.to_mean_centered_data(positions, rotations, context_len,
-                                         return_offset=True)
-    global_rotations, global_positions = data_utils.fk_torch(
-        rotations, positions, parents)
-    
-    # gpos_zscore: (batch, seq, joint, 3)
-    # gquat: (batch, seq, joint, 4)
-    gpos_zscore = (global_positions - mean_rmi) / std_rmi   # NOTICE:mean_rmi是怎么计算的？
-    gquat = data_utils.matrix9D_to_quat_torch(global_rotations)w
-    gquat = data_utils.remove_quat_discontinuities(gquat)
-    '''
-    gpos_zscore = (positions - mean_rmi) / std_rmi   # NOTICE:mean_rmi是怎么计算的？
-    gquat = data_utils.matrix9D_to_quat_torch(rotations)
-    gquat = data_utils.remove_quat_discontinuities(gquat)
-    # Predicted ------------------------------------------------------------
-    '''
-    pos_new, rot_new = data_utils.apply_root_pos_rot_offset(
-        pos_new, rot_new, root_pos_offset, root_rot_offset)
-    grot_new, gpos_new = data_utils.fk_torch(rot_new, pos_new, parents)
+        gpos_new_zscore = (pos_new - mean_rmi) / std_rmi
+        gquat_new = data_utils.matrix9D_to_quat_torch(rot_new)
+        gquat_new = data_utils.remove_quat_discontinuities(gquat_new)
+        # Loss -----------------------------------------------------------------
+        gpos_batch_loss = get_l2loss_batch(
+            gpos_zscore[i, seq_slice, :, :].flatten(-2),
+            gpos_new_zscore[i, seq_slice, :, :].flatten(-2))
+        gquat_batch_loss = get_l2loss_batch(
+            gquat[i, seq_slice, :, :].flatten(-2),
+            gquat_new[i, seq_slice, :, :].flatten(-2))
+        npss_batch_loss, npss_batch_weight = get_npss_loss_batch(
+            gquat[i, seq_slice, :, :].flatten(-2),
+            gquat_new[i, seq_slice, :, :].flatten(-2)
+        )
+        npss_batch_loss2, npss_batch_weight2 = get_npss_loss_batch(
+            gpos_zscore[i, seq_slice, :, :].flatten(-2),
+            gpos_new_zscore[i, seq_slice, :, :].flatten(-2)
+        )
+        res["gpos"].append(gpos_batch_loss)
+        res["gquat"].append(gquat_batch_loss)
+        res["npss"].append(npss_batch_loss)
+        res["npssw"].append(npss_batch_weight)
+        res["npss2"].append(npss_batch_loss2)
+        res["npssw2"].append(npss_batch_weight2)
 
-    gpos_new_zscore = (gpos_new - mean_rmi) / std_rmi
-    gquat_new = data_utils.matrix9D_to_quat_torch(grot_new)
-    gquat_new = data_utils.remove_quat_discontinuities(gquat_new)
-    '''
-    gpos_new_zscore = (pos_new - mean_rmi) / std_rmi
-    gquat_new = data_utils.matrix9D_to_quat_torch(rot_new)
-    gquat_new = data_utils.remove_quat_discontinuities(gquat_new)
-    # Loss -----------------------------------------------------------------
-    gpos_batch_loss = get_l2loss_batch(
-        gpos_zscore[..., seq_slice, :, :].flatten(-2),
-        gpos_new_zscore[..., seq_slice, :, :].flatten(-2))
-    gquat_batch_loss = get_l2loss_batch(
-        gquat[..., seq_slice, :, :].flatten(-2),
-        gquat_new[..., seq_slice, :, :].flatten(-2))
-    npss_batch_loss, npss_batch_weight = get_npss_loss_batch(
-        gquat[..., seq_slice, :, :].flatten(-2),
-        gquat_new[..., seq_slice, :, :].flatten(-2)
-    )
-    npss_batch_loss2, npss_batch_weight2 = get_npss_loss_batch(
-        gpos_zscore[..., seq_slice, :, :].flatten(-2),
-        gpos_new_zscore[..., seq_slice, :, :].flatten(-2)
-    )
-
-    return gpos_batch_loss, gquat_batch_loss, npss_batch_loss, npss_batch_weight, npss_batch_loss2,npss_batch_weight2
+    return torch.cat(res["gpos"],dim=0), torch.cat(res["gquat"],dim=0), torch.cat(res["npss"],dim=0), torch.cat(res["npssw"],dim=0), torch.cat(res["npss2"],dim=0), torch.cat(res["npssw2"],dim=0)
 
 
 # zero velocity baseline ####################################################
