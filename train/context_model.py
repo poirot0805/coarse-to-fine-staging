@@ -13,12 +13,13 @@ from motion_inbetween_pred.data import utils_torch as data_utils
 from motion_inbetween_pred.train import rmi
 from motion_inbetween_pred.train import utils as train_utils
 
-SEQNUM_GEO=13
+SEQNUM_GEO=12
 LENGTH_TOKEN =1
 ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
 INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
 Data_Mask_MODE = 1  # //0: no data mask //1: normal //2: geo mask =2
+train_length_mode ="gt" # gt/pred/mix/step
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
     assert geo.shape[-1]==9
@@ -329,13 +330,40 @@ def train(config):
     global INIT_INTERP
     global SEQNUM_GEO
     global LENGTH_TOKEN
+    global train_length_mode
     global zscore_MODE
     global Data_Mask_MODE
     ATTENTION_MODE = config["train"]["attention_mode"]
     INIT_INTERP = config["train"]["init_interp"]
     zscore_MODE = config["train"]["zscore_MODE"]    # normal/none/seq
     Data_Mask_MODE = config["train"]["data_mask_set"] 
-    print(ATTENTION_MODE,INIT_INTERP,zscore_MODE)
+    train_length_mode = config["train"]["train_length_mode"] 
+    teach_ep = 50
+    mix_ep = 50
+    stu_ep = 300
+    if train_length_mode=="gt":
+        teach_ep=400
+        mix_ep = 0
+        stu_ep = 0
+    if train_length_mode=="pred":
+        teach_ep=0
+        mix_ep = 0
+        stu_ep = 400
+    if train_length_mode=="mix":
+        teach_ep=0
+        mix_ep=400
+        stu_ep=0
+    sample_schedule = torch.cat(
+        (
+            # First part is pure teacher forcing
+            torch.zeros(teach_ep),
+            # Second part with schedule sampling
+            torch.linspace(0.0, 1.0, mix_ep),
+            # last part is pure student
+            torch.ones(stu_ep),
+        )
+    )
+    print(ATTENTION_MODE,INIT_INTERP,zscore_MODE,train_length_mode)
     indices = config["indices"]
     info_interval = config["visdom"]["interval"]
     eval_interval = config["visdom"]["interval_eval"]
@@ -346,7 +374,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
+    device = torch.device(config["train"]["device"])
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -401,13 +429,14 @@ def train(config):
     reg_loss_avg=0
     c_loss_avg = 0
     f_loss_avg = 0
-
+    constraint_loss_avg=0
     min_benchmark_loss = float("inf")
     min_val_loss = float("inf")
     inter_pos,inter_rot9d,inter_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
-            (positions, rotations, names, frame_nums, init_n, trends, geo, remove_idx, data_idx) = data 
+            (positions, rotations, names, frame_nums, init_n, trends, geo, remove_idx, data_idx) = data
+            use_student = torch.rand(1) < sample_schedule[epoch - 1]
             # trans
             #min_trans = min(frame_nums)-2
             # prob =random.uniform(0,1)
@@ -422,7 +451,7 @@ def train(config):
                 target_idx = context_len+frame_nums.int()[j]-2
                 seq_slice = slice(context_len, target_idx)
                 gt_seq_slice_list.append(seq_slice)
-            common_seq_slice = slice(context_len, context_len+min(init_n.int())-2)
+            common_seq_slice = slice(context_len, context_len+min(init_n.int())-2) if use_student else slice(context_len, context_len+min(frame_nums.int())-2)
             # get random midway target frames 
             # HACK:
             midway_targets = get_midway_targets(
@@ -528,7 +557,7 @@ def train(config):
             y = x_gt_zscore.clone().detach()    # BUG:x_gt是含有joint
             #tmp_out = model_out[..., seq_slice, :]
             for j in range(len(gt_seq_slice_list)):
-                seq_slice=gt_seq_slice_list[j]
+                seq_slice=seq_slice_list[j] if use_student else gt_seq_slice_list[j]
                 y[j, seq_slice, :,:] = model_out[j, seq_slice, :,:]#tmp_out.reshape((*tmp_out.shape[:-1],28,9))
 
 
@@ -551,12 +580,13 @@ def train(config):
             foot_state=torch.cat([pos_new,rot_6d_new],dim=-1)  
             
             
-            r_loss = train_utils.cal_r_loss_sp(x_gt, y, gt_seq_slice_list, indices)#FIXME
+            r_loss = train_utils.cal_r_loss_sp(x_gt, y, seq_slice_list if use_student else gt_seq_slice_list, indices)#FIXME
             # smooth_loss = train_utils.cal_smooth_loss(gpos_new, seq_slice)
-            smooth_loss = train_utils.cal_smooth_loss(pos_new, gt_seq_slice_list)   # FIXME:rot要不要加进去
+            smooth_loss = train_utils.cal_smooth_loss(pos_new, seq_slice_list if use_student else gt_seq_slice_list)   # FIXME:rot要不要加进去
             # p_loss = train_utils.cal_p_loss(global_positions, gpos_new, seq_slice)
-            p_loss = train_utils.cal_p_loss(global_positions, pos_new, gt_seq_slice_list)
+            p_loss = train_utils.cal_p_loss(global_positions, pos_new, seq_slice_list if use_student else gt_seq_slice_list)
             reg_loss = torch.mean(torch.abs(pred_n-frame_nums))
+            constraint_loss = train_utils.cal_fix_loss(x_gt, y,gt_seq_slice_list,seq_slice_list if use_student else gt_seq_slice_list)
             loss=None
             if config["train"]["trends_loss"]:
                 c_loss = train_utils.cal_c_loss(trends, c_out, seq_slice)
@@ -584,7 +614,8 @@ def train(config):
                     config["weights"]["rw"] * r_loss +
                     config["weights"]["pw"] * p_loss +
                     config["weights"]["sw"] * smooth_loss+
-                    config["weights"]["nw"] * reg_loss
+                    config["weights"]["nw"] * reg_loss+
+                    config["weights"]["cw"] * constraint_loss
                 )
                 loss.backward()
                 optimizer.step()
@@ -594,6 +625,7 @@ def train(config):
                 p_loss_avg += p_loss.item()
                 smooth_loss_avg += smooth_loss.item()
                 reg_loss_avg +=reg_loss.item()
+                constraint_loss_avg+=constraint_loss.item()
 
             loss_avg += loss.item()
 
@@ -609,20 +641,22 @@ def train(config):
                 c_loss_avg /= info_interval
                 f_loss_avg /= info_interval
                 reg_loss_avg /=info_interval
+                constraint_loss_avg/=info_interval
                 loss_avg /= info_interval
                 lr = optimizer.param_groups[0]["lr"]
 
                 print("Epoch: {}, Iteration: {}, lr: {:.8f}, "
                       "loss: {:.6f}, r: {:.6f}, p: {:.6f}, "
-                      "smooth: {:.6f}, n: {:.6f}, f: {:.6f}".format(
+                      "smooth: {:.6f}, n: {:.6f}, cons: {:.6f}".format(
                           epoch, iteration, lr, loss_avg,
-                          r_loss_avg, p_loss_avg, smooth_loss_avg,reg_loss_avg, f_loss_avg))
+                          r_loss_avg, p_loss_avg, smooth_loss_avg,reg_loss_avg, constraint_loss_avg))
 
                 contents = [
                     ["loss", "r_loss", r_loss_avg],
                     ["loss", "p_loss", p_loss_avg],
                     ["loss", "smooth_loss", smooth_loss_avg],
                     ["loss", "reg_loss", reg_loss_avg],
+                    ["loss", "const_loss", constraint_loss_avg],
                     ["loss weighted", "r_loss",
                         r_loss_avg * config["weights"]["rw"]],
                     ["loss weighted", "p_loss",
@@ -631,6 +665,8 @@ def train(config):
                         smooth_loss_avg * config["weights"]["sw"]],
                     ["loss weighted", "reg_loss",
                         reg_loss_avg * config["weights"]["nw"]],
+                    ["loss weighted", "const_loss",
+                        constraint_loss_avg * config["weights"]["cw"]],
                     ["loss weighted", "loss", loss_avg],
                     ["learning rate", "lr", lr],
                     ["epoch", "epoch", epoch],
@@ -689,12 +725,12 @@ def train(config):
                         train_utils.save_checkpoint(
                             config, model, epoch, iteration,
                             optimizer, scheduler, suffix=f".{iteration}min")
-                if iteration % (eval_interval)==0:
+                if iteration % (eval_interval*10)==0:
                     val_total_loss=0
                     for i in range(len(val_dataloaders)):
                             ds_name = "val"
                             ds_loader = val_dataloaders[i]
-                            trans = ds_loader.dataset.window-2
+                            trans = ds_loader.dataset.start_frame
                             gpos_loss, gquat_loss, npss_loss, val_ploss,val_smoothloss,val_regloss = eval_on_dataset(
                                 config, ds_loader, model, trans)
 
@@ -726,6 +762,7 @@ def train(config):
                 p_loss_avg = 0
                 smooth_loss_avg = 0
                 reg_loss_avg=0
+                constraint_loss_avg =0
                 c_loss_avg = 0
                 f_loss_avg = 0
                 loss_avg = 0

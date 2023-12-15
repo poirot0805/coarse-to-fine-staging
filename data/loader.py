@@ -171,64 +171,29 @@ class BvhDataSet(Dataset):
         curr_idx = idx
         # FIXED:具体如何取是在这里改的
         if self.inference_mode:
-            print("infer!")
-            positions = self.positions[idx][0:]
-            rotations = self.rotations[idx][0:]
-            frame_num=self.frames[idx]
-            add_len=0
-            end_idx=frame_num
-
-            if self.primes[frame_num-1]:
-                flag=False
-                factor=-1
-                add_len=1
-                for i in range(5,1,-1):
-                    if (frame_num)%i==0 and (frame_num)//i<30:
-                        flag=True
-                    elif frame_num%i!=0:
-                        factor=i
-                if flag==False:
-                    factor = factor if factor>0 else 2
-                    add_len = (frame_num//factor+1)*factor-frame_num+1
-            else:
-                flag=False
-                factor=-1
-                for i in range(5,1,-1):
-                    if (frame_num-1)%i==0 and (frame_num-1)//i<30:
-                        flag=True
-                    elif (frame_num-1)%i!=0:
-                        factor=i
-                if flag==False:
-                    factor = factor if factor>0 else 2
-                    add_len = ((frame_num-1)//factor+1)*factor-frame_num+1
-            if frame_num<=30:
-                add_len=0
-            add_len=0
-            add_pos=self.positions[idx][end_idx-1:end_idx]
-            add_rot=self.rotations[idx][end_idx-1:end_idx]
+            tmp_positions = self.positions[idx]
+            tmp_rotations = self.rotations[idx]
+            frame_num = self.frames[idx]
             
-            positions=torch.cat([positions,add_pos.expand([add_len,*add_pos.shape[1:]])],dim=0)
-            rotations=torch.cat([rotations,add_rot.expand([add_len,*add_rot.shape[1:]])],dim=0)
+            extend_length=self.window - frame_num
 
-            zeros_shape = [1,28]
-            zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
-            b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
-            c=(rotations[1:,:,:]-rotations[:-1,:,:]!=0).flatten(start_dim=-2)
-            x=torch.any(b,dim=-1)
-            x2=torch.any(c,dim=-1)
-            temp_trend=torch.logical_or(x,x2)
-            trends=torch.cat([zeros,temp_trend],dim=0).type(self.dtype)
-
+            add_pos=tmp_positions[-1:]
+            add_rot=tmp_rotations[-1:]
+            positions=torch.cat([tmp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
+            rotations=torch.cat([tmp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
+            trends = positions.clone()
             # GEO:
             geo_id=self.geoids[idx]
             remove_idx=torch.zeros(28,dtype=torch.bool,device=self.device)  # 0: not remove / 1: remove
             for k in self.remove_list[idx]:
                 remove_idx[k]=True
+            init_n = self.cal_n(positions[0],positions[-1])
             return (
                 positions,
                 rotations,
                 self.names[idx],
-                frame_num,
+                self._to_tensor(frame_num),
+                self._to_tensor(init_n),
                 trends,
                 self.geo[geo_id],
                 remove_idx,

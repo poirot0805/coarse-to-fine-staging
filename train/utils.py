@@ -132,7 +132,16 @@ def cal_r_loss_sp(x, y, seq_slice_list, indices, weights=None):
         res_list.append(delta.flatten())
     res = torch.cat(res_list)
     return torch.mean(torch.abs(res))
-
+def cal_fix_loss(x,y,gt_seq_slice_list,seq_slice_list):
+    res_list=[]
+    # l1 loss
+    for i in range(len(seq_slice_list)):
+        target = seq_slice_list[i].stop
+        gt_target = gt_seq_slice_list[i].stop
+        delta = y[i, target] - x[i, gt_target]
+        res_list.append(delta.flatten())
+    res = torch.cat(res_list)
+    return torch.mean(torch.abs(res))
 
 def cal_c_loss(c_gt, c_out, seq_slice, weights=None):
     # l1 loss
