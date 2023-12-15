@@ -273,7 +273,7 @@ class SPMultiHeadedAttention(nn.Module):
             combined = self.layer_norm(combined)
 
         # shape: (batch, q/k/v_len, dim)
-        print(hidden.shape)
+        #print(hidden.shape)
         q = self.q_linear(hidden)
         k = self.k_linear(combined)
         v = self.v_linear(combined)
@@ -393,9 +393,7 @@ class AlibiMultiHeadedAttention(nn.Module):
         # (batch, n_head, q_len, k_len)
         atten_score = torch.matmul(q, k.transpose(-1, -2)) # * self.atten_scale
         atten_score = self.alibi_pos(atten_score)
-        if mask is not None:
-            # apply attention mask
-            atten_score = atten_score.masked_fill(mask, float("-inf"))
+        
         atten_score = atten_score.softmax(dim=-1)
         atten_score = self.atten_dropout_layer(atten_score)
 

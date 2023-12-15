@@ -84,7 +84,7 @@ def get_train_stats(config, use_cache=True, stats_folder=None,
         print("Train stats load from {}".format(stats_path))
     else:
         # calculate training stats
-        device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+        device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
         dataset, data_loader = train_utils.init_bvh_dataset(
             config, dataset_name, device, shuffle=True, dtype=torch.float64)
 
@@ -251,7 +251,7 @@ def set_placeholder_root_pos_sp(x, seq_slice_list, midway_targets, p_slice):
     # root position between constrained frames (i.e. last context frame,
     # midway target frames and target frame).
     p_slice = slice(6,9)
-    for j in len(seq_slice_list):
+    for j in range(len(seq_slice_list)):
         seq_slice = seq_slice_list[j]
         constrained_frames = [seq_slice.start - 1, seq_slice.stop]
         constrained_frames.extend(midway_targets)
@@ -346,7 +346,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:2" if torch.cuda.is_available() else "cpu")
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -416,13 +416,13 @@ def train(config):
             seq_slice_list=[]
             gt_seq_slice_list=[]
             for j in range(init_n.shape[0]):
-                target_idx = context_len+init_n[j]-2
+                target_idx = context_len+init_n.int()[j]-2
                 seq_slice = slice(context_len, target_idx)
                 seq_slice_list.append(seq_slice)
-                target_idx = context_len+frame_nums[j]-2
+                target_idx = context_len+frame_nums.int()[j]-2
                 seq_slice = slice(context_len, target_idx)
                 gt_seq_slice_list.append(seq_slice)
-            common_seq_slice = seq_slice(context_len, context_len+min(init_n)-2)
+            common_seq_slice = slice(context_len, context_len+min(init_n.int())-2)
             # get random midway target frames 
             # HACK:
             midway_targets = get_midway_targets(
@@ -432,11 +432,7 @@ def train(config):
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
                 assert (inter_pos==positions).all()==False
             rot_6d = data_utils.matrix9D_to_6D_torch(rotations) # get-input需要的是6d
-            if add_geo_FLAG:
-                trends=torch.cat([torch.zeros([trends.shape[0],SEQNUM_GEO,trends.shape[-1]],dtype=dtype,device=device),
-                                trends],
-                                dim=1
-                                )
+
             # switch torch.tensor to list of list
             n_remove_idx=[ [] for j in range(remove_idx.shape[0])]
             static_ids = remove_idx.nonzero(as_tuple=False).cpu().numpy()
@@ -473,8 +469,8 @@ def train(config):
             #     trans_len = max_trans_
             # else:
             #     trans_len = random.randint(min_trans, max_trans_)
-            target_idx_list = [context_len + init_n[j]-2 for j in range(init_n.shape[0])]
-            gt_target_idx_list =[context_len + frame_nums[j]-2 for j in range(init_n.shape[0])]
+            target_idx_list = [context_len + init_n.int()[j]-2 for j in range(init_n.shape[0])]
+            gt_target_idx_list =[context_len + frame_nums.int()[j]-2 for j in range(init_n.shape[0])]
             # attention mask # HACK:
             atten_mask = get_attention_mask(
                 positions.shape[0], window_len, context_len, target_idx_list, device,
@@ -492,7 +488,7 @@ def train(config):
             # prepare model input
             x_gt = get_model_input_sp(positions, rot_6d)#FIXME
             x_gt_zscore = (x_gt - mean) / std
-            cls_token = init_n.expand(positions.shape[0],1,28,9)
+            cls_token = init_n.unsqueeze(1).unsqueeze(2).unsqueeze(3).expand(positions.shape[0],1,28,9)
             if add_geo_FLAG:
                 geo_ctrl = geo#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)#FIXME
                 if zscore_MODE=="seq":
@@ -531,7 +527,7 @@ def train(config):
             #         model_out[..., seq_slice, c_slice]) 
             y = x_gt_zscore.clone().detach()    # BUG:x_gt是含有joint
             #tmp_out = model_out[..., seq_slice, :]
-            for j in len(gt_seq_slice_list):
+            for j in range(len(gt_seq_slice_list)):
                 seq_slice=gt_seq_slice_list[j]
                 y[j, seq_slice, :,:] = model_out[j, seq_slice, :,:]#tmp_out.reshape((*tmp_out.shape[:-1],28,9))
 
@@ -677,7 +673,7 @@ def train(config):
                             ])
                             print("{}:\ngpos: {:6f}, gquat: {:6f}, "
                                   "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}, reg_loss: {:.6f}".format(ds_name, gpos_loss,
-                                                        gquat_loss, npss_loss,val_ploss,val_regloss))
+                                                        gquat_loss, npss_loss,val_ploss,val_smoothloss,val_regloss))
 
                             if ds_name == "benchmark":
                                 # After iterations, benchmark_loss will be the
@@ -686,14 +682,14 @@ def train(config):
                                 # in eval_interval.
                                 benchmark_loss = (gpos_loss + gquat_loss +
                                                   npss_loss + val_regloss)
-
+                        break
                     if min_benchmark_loss > benchmark_loss:
                         min_benchmark_loss = benchmark_loss
                         # save min loss checkpoint
                         train_utils.save_checkpoint(
                             config, model, epoch, iteration,
                             optimizer, scheduler, suffix=f".{iteration}min")
-                if iteration % (eval_interval*10)==0:
+                if iteration % (eval_interval)==0:
                     val_total_loss=0
                     for i in range(len(val_dataloaders)):
                             ds_name = "val"
@@ -821,10 +817,10 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         
         seq_slice_list=[]
         for j in range(init_n.shape[0]):
-            target_idx = context_len+init_n[j]-2
+            target_idx = context_len+init_n.int()[j]-2
             seq_slice = slice(context_len, target_idx)
             seq_slice_list.append(seq_slice)
-        target_idx_list = [context_len + init_n[j]-2 for j in range(init_n.shape[0])]
+        target_idx_list = [context_len + init_n.int()[j]-2 for j in range(init_n.shape[0])]
         atten_mask = get_attention_mask(
                 positions.shape[0], window_len, context_len, target_idx_list, device,
                 midway_targets=[])
@@ -940,9 +936,9 @@ def evaluate(model, positions, rotations,init_n,real_n, seq_slice_list, target_i
     global LENGTH_TOKEN
     dtype = positions.dtype
     device = positions.device
-    window_len = 192
+    window_len = 160
     context_len = 1 + SEQNUM_GEO + LENGTH_TOKEN
-    gt_target_idx_list =[context_len + real_n[j]-2 for j in range(init_n.shape[0])]
+    gt_target_idx_list =[context_len + real_n.int()[j]-2 for j in range(init_n.shape[0])]
 
 
     rp_slice = slice(indices["r_start_idx"], indices["p_end_idx"])
@@ -968,7 +964,7 @@ def evaluate(model, positions, rotations,init_n,real_n, seq_slice_list, target_i
         geo_ctrl=None
         x_orig = get_model_input_sp(positions, rotations)#FIXME
         x_zscore = (x_orig - mean) / std
-        cls_token = init_n.expand(positions.shape[0],1,28,9)
+        cls_token = init_n.unsqueeze(1).unsqueeze(2).unsqueeze(3).expand(positions.shape[0],1,28,9)
         if geo is not None:
             geo_ctrl=geo #FIXME#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
             if zscore_MODE=="seq":
@@ -997,7 +993,7 @@ def evaluate(model, positions, rotations,init_n,real_n, seq_slice_list, target_i
         # calculate model output y
         model_out,pred_n = model(x, None, mask=atten_mask)
         y = x_zscore.clone().detach()
-        for j in len(y.shape[0]):
+        for j in range(y.shape[0]):
             seq_slice=slice(context_len,pred_n.int()[j])
             y[j, seq_slice, :,:] = model_out[j, seq_slice, :,:]
         if post_process:

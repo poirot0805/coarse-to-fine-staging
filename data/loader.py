@@ -142,31 +142,32 @@ class BvhDataSet(Dataset):
         n_3=[]
         n_4=[]
         for i in range(4,10):
-            y = pos_len(pos1[i],pos2[i])
+            y = pos_len(pos1[i]-pos2[i])
             n_1.append(y)
         for i in range(0,4):
-            y = pos_len(pos1[i],pos2[i])
+            y = pos_len(pos1[i]-pos2[i])
             n_2.append(y)
         for i in range(10,14):
-            y = pos_len(pos1[i],pos2[i])
+            y = pos_len(pos1[i]-pos2[i])
             n_2.append(y)
         for i in range(18,24):
-            y = pos_len(pos1[i],pos2[i])
+            y = pos_len(pos1[i]-pos2[i])
             n_3.append(y)
         for i in range(14,18):
-            y = pos_len(pos1[i],pos2[i])
+            y = pos_len(pos1[i]-pos2[i])
             n_4.append(y)
         for i in range(24,28):
-            y = pos_len(pos1[i],pos2[i])
+            y = pos_len(pos1[i]-pos2[i])
             n_4.append(y)
-        return max(max(n_1)+max(n_2), max(n_3)+max(n_4))
+        return max(max(n_1)+max(n_2), max(n_3)+max(n_4))*5
     def __len__(self):
         if self.inference_mode:
             return len(self.frames)
 
-        return self.clip_num
+        return len(self.positions)
 
     def __getitem__(self, idx):
+
         curr_idx = idx
         # FIXED:具体如何取是在这里改的
         if self.inference_mode:
@@ -268,8 +269,8 @@ class BvhDataSet(Dataset):
                 positions,
                 rotations,
                 self.names[geo_id],
-                frame_num,
-                init_n,
+                self._to_tensor(frame_num),
+                self._to_tensor(init_n),
                 trends,
                 self.geo[geo_id],
                 remove_idx,
@@ -382,11 +383,36 @@ class ValToothDataSet(Dataset):
             
             self.clip_num+=1
                 
-
+    def cal_n(self,pos1,pos2):
+        def pos_len(x):
+            return torch.sqrt(torch.dot(x,x))
+        n_1 =[]
+        n_2=[]
+        n_3=[]
+        n_4=[]
+        for i in range(4,10):
+            y = pos_len(pos1[i]-pos2[i])
+            n_1.append(y)
+        for i in range(0,4):
+            y = pos_len(pos1[i]-pos2[i])
+            n_2.append(y)
+        for i in range(10,14):
+            y = pos_len(pos1[i]-pos2[i])
+            n_2.append(y)
+        for i in range(18,24):
+            y = pos_len(pos1[i]-pos2[i])
+            n_3.append(y)
+        for i in range(14,18):
+            y = pos_len(pos1[i]-pos2[i])
+            n_4.append(y)
+        for i in range(24,28):
+            y = pos_len(pos1[i]-pos2[i])
+            n_4.append(y)
+        return max(max(n_1)+max(n_2), max(n_3)+max(n_4))*5
     def __len__(self):
         count = 0
 
-        return self.clip_num
+        return len(self.positions)
 
     def __getitem__(self, idx):
         curr_idx = idx
@@ -425,8 +451,8 @@ class ValToothDataSet(Dataset):
                 positions,
                 rotations,
                 self.names[geo_id],
-                frame_num,
-                init_n,
+                self._to_tensor(frame_num),
+                self._to_tensor(init_n),
                 trends,
                 self.geo[geo_id],
                 remove_idx,

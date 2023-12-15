@@ -95,7 +95,7 @@ def get_rmi_style_batch_loss(positions, rotations, pos_new, rot_new,
     res={
         "gpos":[],"gquat":[],"npss":[],"npssw":[],"npss2":[],"npssw2":[]
     }
-    for i in len(target_idx_list):
+    for i in range(len(target_idx_list)):
         seq_slice = slice(context_len, target_idx_list[i])
 
         gpos_zscore = (positions - mean_rmi) / std_rmi   # NOTICE:mean_rmi是怎么计算的？
@@ -108,18 +108,18 @@ def get_rmi_style_batch_loss(positions, rotations, pos_new, rot_new,
         gquat_new = data_utils.remove_quat_discontinuities(gquat_new)
         # Loss -----------------------------------------------------------------
         gpos_batch_loss = get_l2loss_batch(
-            gpos_zscore[i, seq_slice, :, :].flatten(-2),
-            gpos_new_zscore[i, seq_slice, :, :].flatten(-2))
+            gpos_zscore[i:i+1, seq_slice, :, :].flatten(-2),
+            gpos_new_zscore[i:i+1, seq_slice, :, :].flatten(-2))
         gquat_batch_loss = get_l2loss_batch(
-            gquat[i, seq_slice, :, :].flatten(-2),
-            gquat_new[i, seq_slice, :, :].flatten(-2))
+            gquat[i:i+1, seq_slice, :, :].flatten(-2),
+            gquat_new[i:i+1, seq_slice, :, :].flatten(-2))
         npss_batch_loss, npss_batch_weight = get_npss_loss_batch(
-            gquat[i, seq_slice, :, :].flatten(-2),
-            gquat_new[i, seq_slice, :, :].flatten(-2)
+            gquat[i:i+1, seq_slice, :, :].flatten(-2),
+            gquat_new[i:i+1, seq_slice, :, :].flatten(-2)
         )
         npss_batch_loss2, npss_batch_weight2 = get_npss_loss_batch(
-            gpos_zscore[i, seq_slice, :, :].flatten(-2),
-            gpos_new_zscore[i, seq_slice, :, :].flatten(-2)
+            gpos_zscore[i:i+1, seq_slice, :, :].flatten(-2),
+            gpos_new_zscore[i:i+1, seq_slice, :, :].flatten(-2)
         )
         res["gpos"].append(gpos_batch_loss)
         res["gquat"].append(gquat_batch_loss)
@@ -128,7 +128,7 @@ def get_rmi_style_batch_loss(positions, rotations, pos_new, rot_new,
         res["npss2"].append(npss_batch_loss2)
         res["npssw2"].append(npss_batch_weight2)
 
-    return torch.cat(res["gpos"],dim=0), torch.cat(res["gquat"],dim=0), torch.cat(res["npss"],dim=0), torch.cat(res["npssw"],dim=0), torch.cat(res["npss2"],dim=0), torch.cat(res["npssw2"],dim=0)
+    return np.concatenate(res["gpos"],axis=0), np.concatenate(res["gquat"],axis=0), np.concatenate(res["npss"],axis=0), np.concatenate(res["npssw"],axis=0), np.concatenate(res["npss2"],axis=0), np.concatenate(res["npssw2"],axis=0)
 
 
 # zero velocity baseline ####################################################
