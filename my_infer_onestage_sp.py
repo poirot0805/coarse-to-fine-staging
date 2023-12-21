@@ -55,7 +55,7 @@ def cal_n(pos1,pos2):
         for i in range(24,28):
             y = pos_len(pos1[i]-pos2[i])
             n_4.append(y)
-        return round((max(max(n_1)+max(n_2), max(n_3)+max(n_4))*5).cpu())
+        return max(max(n_1)+max(n_2), max(n_3)+max(n_4))*5
 def post_process(data_gt,rot_gt, key_id_list):
     #interp
     total_len=data_gt.shape[2]
@@ -206,7 +206,7 @@ if __name__ == "__main__":
     gquat_loss_list=[]
     npss_loss_list=[]
     npss_loss_pos_list=[]
-
+    reg_loss_list=[]
     all_frames=0
     for i, data in enumerate(data_loader, 0):
         (positions, rotations, file_name, real_frame_num,trends,geo,remove_idx,data_idx) = data # FIXED:返回类型(1,seq,joint,3)
@@ -224,7 +224,10 @@ if __name__ == "__main__":
         assert add_len==0
         sparse_trans=total_len-2
         dense_trans=0
-        pred_n = cal_n(positions[0,0],positions[0,-1])+20
+        # FIXME
+        pred_n = round((cal_n(positions[0,0],positions[0,-1])+30).item())
+        print(pred_n)
+        sparse_trans = pred_n-2
         print("dense trans:{} sparse trans:{}".format(dense_trans,sparse_trans))
         
         target_idx = context_len + sparse_trans
@@ -269,43 +272,66 @@ if __name__ == "__main__":
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
         ##################33
         # for sparse
-        sparse_seq=slice(0,total_len,dense_trans+1)
-        sp_pos=positions[:,sparse_seq]
-        sp_rot=rot_6d[:,sparse_seq]     # rotations[:,sparse_seq]
-        
+        sparse_seq=slice(0,pred_n,dense_trans+1)
+        extend_length = 0 if pred_n<=total_len else pred_n-total_len
+        add_pos=positions[:,-1]
+        add_rot=rot_6d[:,-1]
+        positions_ex=torch.cat([positions,add_pos.expand([1,extend_length,*add_pos.shape[1:]])],dim=1)
+        rotations_ex=torch.cat([rot_6d,add_rot.expand([1,extend_length,*add_rot.shape[1:]])],dim=1)
+        sp_pos=positions_ex[:,sparse_seq].clone().detach()
+        sp_rot=rotations_ex[:,sparse_seq].clone().detach()     # rotations[:,sparse_seq]
+        sp_pos[:,-1]=positions[:,-1]
+        sp_rot[:,-1]=rot_6d[:,-1]
         # attention mask
         atten_mask = context_model.get_attention_mask(
             window_len, context_len, target_idx, device)
-        if (real_frame_num-1)%(dense_trans+1)==0:
-            x=(real_frame_num-1)//(dense_trans+1)
-            # print(type(x))
-            midway.append(int(x))
-            sp_pos_new, sp_rot_new = context_model.evaluate(
-                model, sp_pos, sp_rot, seq_slice,
-                indices, mean, std, atten_mask, post_process=False,midway_targets=midway,geo=geo,inter_x_zs = None)
-        else:
-            sp_pos_new, sp_rot_new = context_model.evaluate(
+
+        sp_pos_new, sp_rot_new = context_model.evaluate(
                 model, sp_pos, sp_rot, seq_slice,
                 indices, mean, std, atten_mask, post_process=False,geo=geo,inter_x_zs = None)
         parents=[]
         # NOTICE:evaluate的结果包含geo的长度,rot_9d
         assert sp_pos.shape[1]+SEQNUM_GEO==sp_pos_new.shape[1]
-        
+        # check:
+        stop_idx=pred_n-30+SEQNUM_GEO
+        for kk in range(pred_n-30+SEQNUM_GEO,pred_n+SEQNUM_GEO):
+            pos_check =np.max(torch.abs(sp_pos_new[:,kk]-positions[:,-1]).cpu().numpy(), axis=(0, 1))
+            sp_rot_new2 = sp_rot_new.cpu().numpy()
+            rot2 = rotations.cpu().numpy()
+            rot_3d = np.zeros((2,28,3))
+            for m in range(28):
+                    rot_3d[0,m]=process_rotation(sp_rot_new2[0,kk,m])
+                    rot_3d[1,m]=process_rotation(rot2[0,-1,m])
+            angle_diff = np.abs(rot_3d[0]-rot_3d[1])
+            rot_check = np.max(angle_diff, axis=0)
+            flag= True
+            for thres_idx in range(3):
+                if pos_check[thres_idx]>pos_move_thres[thres_idx]:
+                    flag=False
+                    break
+                if rot_check[thres_idx]>rot_move_thres[thres_idx]:
+                    flag=False
+                    break
+            if flag:
+                stop_idx=kk
+                break
         # for dense
-        res_slice=slice(seq_slice.start-1,seq_slice.stop+1)
+        res_slice=slice(seq_slice.start-1,stop_idx+2)
         
         pos_new=sp_pos_new[:,res_slice]
         rot_new=sp_rot_new[:,res_slice]
-        assert pos_new.shape[1]==sparse_trans+2
+        #assert pos_new.shape[1]==sparse_trans+2
         print((positions==tmp_pos).all())
         # restore vacant teeth
-        print(remove_len)
+        new_len = pos_new.shape[1]
+        print("reg-loss:",abs(total_len-new_len)," new len:",new_len)
+        reg_loss_list.append(abs(total_len-new_len))
         for j in range(remove_len):
             remove_list=remove_idx[j]
             positions[j,:,remove_list,:]=tmp_pos[j,:,remove_list,:]
-            pos_new[j,:,remove_list,:]=tmp_pos[j,:,remove_list,:]
+            pos_new[j,:,remove_list,:]=tmp_pos[j,:new_len,remove_list,:]
             rotations[j,:,remove_list,:,:]=tmp_rot9d[j,:,remove_list,:,:]
-            rot_new[j,:,remove_list,:,:]=tmp_rot9d[j,:,remove_list,:,:]
+            rot_new[j,:,remove_list,:,:]=tmp_rot9d[j,:new_len,remove_list,:,:]
         
         target_idx=pos_new.shape[1]-1
 
@@ -357,7 +383,9 @@ if __name__ == "__main__":
     gquat_mean_loss=sum(gquat_loss_list)/all_frames
     npss_mean_loss=sum(npss_loss_list)/1001
     npss_mean_loss_pos=sum(npss_loss_pos_list)/1001
+    reg_mean_loss=sum(reg_loss_list)/1001
     print("total | gpos:{:.6f} gquat:{:.6f}| all frames:{} | npss:{:.6f} | npss_pos:{:.6f}".format(gpos_mean_loss,gquat_mean_loss,all_frames,npss_mean_loss,npss_mean_loss_pos))
+    print("reg mean:{:.6f}".format(reg_mean_loss))
     end_time = time.time()
     print(f"total time:{end_time-start_time}")
     csv_data={"file":csv_filename,

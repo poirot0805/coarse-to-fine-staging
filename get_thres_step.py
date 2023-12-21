@@ -115,36 +115,53 @@ if __name__ == "__main__":
         pos_move = np.zeros((4,3))
         rot_move = np.zeros((4,3))
         file_name=file_name[0]
-        print(f"file name:{file_name}")
-        
+        print(f"file name:{file_name} idx:{data_idx}")
+        n_remove_idx=[ [] for j in range(remove_idx.shape[0])]
+        static_ids = remove_idx.nonzero(as_tuple=False).cpu().numpy()
+        for j in range(static_ids.shape[0]):
+            x0=static_ids[j,0]
+            y0=static_ids[j,1]
+            n_remove_idx[x0].append(y0)
+        remove_idx=n_remove_idx[0]
+        mask = np.ones(x.shape[1], dtype=bool)
+        mask[remove_idx] = False
+
+        positions = positions[:,:, mask, :]
+        rotations = rotations[:,:, mask, :,:]
+
         total_len=positions.shape[1]
+        joints = positions.shape[2]
         all_frames+=(total_len-2)
         print("total-len:{} real:{}".format(total_len,real_frame_num))
         # 相邻pos的差值
-        adj_pos = torch.abs(positions[0,1:]-positions[0,:-1]).cpu().numpy()
-        print(adj_pos.shape)    # (f-1,28,3)
-        pos_move[:3,0]=np.min(adj_pos, axis=(0, 1))
-        pos_move[:3,1]=np.max(adj_pos, axis=(0, 1))
-        pos_move[:3,2]=np.mean(adj_pos, axis=(0, 1))
-        inner_dot = np.sqrt(np.sum(adj_pos * adj_pos, axis=2, keepdims=True))
-        pos_move[3,0]=np.min(inner_dot)
-        pos_move[3,1]=np.max(inner_dot)
-        pos_move[3,2]=np.mean(inner_dot)
+        adj_pos = torch.abs(positions[0,-1]-positions[0,-2]).cpu().numpy()
+        print(adj_pos.shape)    # (28，3)
+        adj_pos[adj_pos == 0] = np.nan
+        pos_move[:3,0]=np.nanmin(adj_pos, axis=0)
+        pos_move[:3,1]=np.nanmax(adj_pos, axis=0)
+        pos_move[:3,2]=np.nanmean(adj_pos, axis=0)
+        inner_dot = np.sqrt(np.sum(adj_pos * adj_pos, axis=1, keepdims=True))
+        pos_move[3,0]=np.nanmin(inner_dot)
+        pos_move[3,1]=np.nanmax(inner_dot)
+        pos_move[3,2]=np.nanmean(inner_dot)
         pos_res.append(pos_move[np.newaxis,:,:])
         # rot
         rotations = rotations.cpu().numpy()
-        rot_3d = np.zeros((total_len,28,3))
-        for m in range(rotations.shape[1]):
-            for j in range(rotations.shape[2]):
-                rot_3d[m,j]=process_rotation(rotations[0,m,j])
+        rot_3d = np.zeros((2,joints,3))
+
+        for j in range(rotations.shape[2]):
+            rot_3d[0,j]=process_rotation(rotations[0,-1,j])
+            rot_3d[1,j]=process_rotation(rotations[0,-2,j])
         angle_diff = np.abs(rot_3d[1:]-rot_3d[:-1])
         theta = np.sum(angle_diff,axis=-1)
         theta_new = theta[:,:,np.newaxis]
         adj_rot = np.concatenate((angle_diff,theta_new),axis=-1)
-        rot_move[:,0] = np.min(adj_rot, axis=(0, 1))
-        rot_move[:,1] = np.max(adj_rot, axis=(0, 1))
-        rot_move[:,2] = np.mean(adj_rot, axis=(0, 1))
+        adj_rot[adj_rot == 0] = np.nan
+        rot_move[:,0] = np.nanmin(adj_rot, axis=(0, 1))
+        rot_move[:,1] = np.nanmax(adj_rot, axis=(0, 1))
+        rot_move[:,2] = np.nanmean(adj_rot, axis=(0, 1))
         rot_res.append(rot_move[np.newaxis,:,:])
+        print(pos_res,rot_res)
         # rot的差值
     pos_data = np.concatenate(pos_res,axis=0)
     rot_data = np.concatenate(rot_res,axis=0)
