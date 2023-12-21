@@ -19,12 +19,43 @@ from motion_inbetween_space.train import rmi
 from motion_inbetween_space.train import context_model,detail_model
 from motion_inbetween_space.train import utils as train_utils
 from motion_inbetween_space.data import utils_torch as data_utils
-# python my_infer_onestage_sp.py ablationsp_context_modelgeo2dAlibiNoabsGeo0 newgeo_context_modelNOGEOdense
+# python my_infer_onestage_slerp.py ablationonestage_context_modelgeo2dAlibiNoabsGeo0slerp_lossw_trans newgeo_context_modelNOGEOdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMask newgeo_context_modelVMdense
 # python my_infer.py cmpgeo_context_modelVMeanNoMaskNoG newgeo_context_modelNOGEOdense
 # python my_infer.py cmpgeo_context_modelVacantMean cmpgeo_context_modelDenseVacant
-
-
+def process_rotation(r):
+        x, y, z = r[:, 0], r[:, 1], r[:, 2]
+        angles = np.arccos(np.clip([np.dot(x, [1, 0, 0]), 
+                                    np.dot(y, [0, 1, 0]), 
+                                    np.dot(z, [0, 0, 1])], -1, 1))
+        return angles
+def cal_n(pos1,pos2):
+        # pos[0],pos[-1]
+        def pos_len(x):
+            return torch.sqrt(torch.dot(x,x))
+        n_1 =[]
+        n_2=[]
+        n_3=[]
+        n_4=[]
+        for i in range(4,10):
+            y = pos_len(pos1[i]-pos2[i])
+            n_1.append(y)
+        for i in range(0,4):
+            y = pos_len(pos1[i]-pos2[i])
+            n_2.append(y)
+        for i in range(10,14):
+            y = pos_len(pos1[i]-pos2[i])
+            n_2.append(y)
+        for i in range(18,24):
+            y = pos_len(pos1[i]-pos2[i])
+            n_3.append(y)
+        for i in range(14,18):
+            y = pos_len(pos1[i]-pos2[i])
+            n_4.append(y)
+        for i in range(24,28):
+            y = pos_len(pos1[i]-pos2[i])
+            n_4.append(y)
+        return round((max(max(n_1)+max(n_2), max(n_3)+max(n_4))*5).cpu())
 def post_process(data_gt,rot_gt, key_id_list):
     #interp
     total_len=data_gt.shape[2]
@@ -135,7 +166,7 @@ if __name__ == "__main__":
     model = STTransformer(config["model"]).to(device)
     # dense_model=ContextTransformer(dense_config["model"]).to(device)
     # load checkpoint
-    epoch, iteration = train_utils.load_checkpoint(config, model,suffix=".min")
+    epoch, iteration = train_utils.load_checkpoint(config, model,suffix=".440000val_min")
     # train_utils.load_checkpoint(dense_config, dense_model,suffix=".min")
 
     indices = config["indices"]
@@ -158,7 +189,19 @@ if __name__ == "__main__":
         fill_value_dense=mean_d
     fill_value_p,fill_value_r6d=fill_value[:,6:],fill_value[:,:6]#context_model.from_flat_data_joint_data(fill_value)
     #fill_value_p_dense,fill_value_r6d_dense=context_model.from_flat_data_joint_data(fill_value_dense)
+    pos_move_thres=[0.017420013136957107, 0.027355633948468894, 0.012562895294524295, 0.04231574494684617]
+    rot_move_thres = [0.0028918912428772983, 0.002785734183143695, 0.0020721250317460127, 0.007749750457767005]
+    """_summary_
     
+    min-pos: [0.0, 0.0, 0.0, 0.0]
+    max-pos: [6.64840030670166, 10.052639961242676, 8.34296989440918, 10.745515823364258]
+    mean-pos: [0.017420013136957107, 0.027355633948468894, 0.012562895294524295, 0.04231574494684617]
+    min-r: [0.0, 0.0, 0.0, 0.0]
+    max-r: [0.8709905738918788, 1.001951524052534, 0.8647810764436614, 2.2589362808845657]
+    mean-r: [0.0028918912428772983, 0.002785734183143695, 0.0020721250317460127, 0.007749750457767005]
+
+    """
+    rot_move_thres=[]
     gpos_loss_list=[]
     gquat_loss_list=[]
     npss_loss_list=[]
@@ -167,8 +210,8 @@ if __name__ == "__main__":
     all_frames=0
     for i, data in enumerate(data_loader, 0):
         (positions, rotations, file_name, real_frame_num,trends,geo,remove_idx,data_idx) = data # FIXED:返回类型(1,seq,joint,3)
-        tmp_pos=positions.clone()
-        tmp_rot9d=rotations.clone()
+        tmp_pos=positions.clone().detach()
+        tmp_rot9d=rotations.clone().detach()
         file_name=file_name[0]
         print(f"file name:{file_name}")
         
@@ -181,7 +224,7 @@ if __name__ == "__main__":
         assert add_len==0
         sparse_trans=total_len-2
         dense_trans=0
-
+        pred_n = cal_n(positions[0,0],positions[0,-1])+20
         print("dense trans:{} sparse trans:{}".format(dense_trans,sparse_trans))
         
         target_idx = context_len + sparse_trans
@@ -300,12 +343,12 @@ if __name__ == "__main__":
         datapath,name=os.path.split(file_name)
         basename,exp=os.path.splitext(name)
         tmp_removeidx=[int(kk) for kk in remove_idx[0]]
-        json_path_gt = "./res1127_space/{}_{}_{}_sp{}_dense{}_gt.json".format(
+        json_path_gt = "./res1221_sp56/{}_{}_{}_sp{}_dense{}_gt.json".format(
             args.config, args.dataset, basename,sparse_trans,dense_trans)
         visualization.save_data_to_json_tooth(
             json_path_gt, positions[0], quat[0],gpos_batch_loss[0], gquat_batch_loss[0],sparse_trans,dense_trans,remove_idx=tmp_removeidx)
 
-        json_path = "./res1127_space/{}_{}_{}_sp{}_dense{}.json".format(
+        json_path = "./res1221_sp56/{}_{}_{}_sp{}_dense{}.json".format(
             args.config, args.dataset, basename,sparse_trans,dense_trans)
         visualization.save_data_to_json_tooth(
             json_path, pos_new[0], quat_new[0],gpos_batch_loss[0], gquat_batch_loss[0],sparse_trans,dense_trans,remove_idx=tmp_removeidx)
