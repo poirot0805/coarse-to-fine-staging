@@ -150,6 +150,8 @@ if __name__ == "__main__":
     csv_d=[]
     csv_gpos=[]
     csv_gquat=[]
+    csv_initn=[]
+    csv_predn=[]
     config = load_config_by_name(args.config)
     dense_config=load_config_by_name(args.dconfig)
     context_model.ATTENTION_MODE = config["train"]["attention_mode"]
@@ -189,19 +191,28 @@ if __name__ == "__main__":
         fill_value_dense=mean_d
     fill_value_p,fill_value_r6d=fill_value[:,6:],fill_value[:,:6]#context_model.from_flat_data_joint_data(fill_value)
     #fill_value_p_dense,fill_value_r6d_dense=context_model.from_flat_data_joint_data(fill_value_dense)
-    pos_move_thres=[0.017420013136957107, 0.027355633948468894, 0.012562895294524295, 0.04231574494684617]
-    rot_move_thres = [0.0028918912428772983, 0.002785734183143695, 0.0020721250317460127, 0.007749750457767005]
+    pos_move_thres=[0.3,0.3,0.3]
+    rot_move_thres = [0.0348,0.0348,0.0348]
     """_summary_
-    
+    total adj:
     min-pos: [0.0, 0.0, 0.0, 0.0]
     max-pos: [6.64840030670166, 10.052639961242676, 8.34296989440918, 10.745515823364258]
     mean-pos: [0.017420013136957107, 0.027355633948468894, 0.012562895294524295, 0.04231574494684617]
     min-r: [0.0, 0.0, 0.0, 0.0]
     max-r: [0.8709905738918788, 1.001951524052534, 0.8647810764436614, 2.2589362808845657]
     mean-r: [0.0028918912428772983, 0.002785734183143695, 0.0020721250317460127, 0.007749750457767005]
+    ---
+    final frame lag:
+        
+    min-pos: [9.685754776000977e-08, 7.008202373981476e-08, 9.872019290924072e-08, 0.00010018801549449563]
+    max-pos: [6.64840030670166, 9.753009796142578, 8.34296989440918, 10.243524551391602]
+    mean-pos: [0.052763684208813576, 0.15134138109856957, 0.03862624792932727, 0.18168698474175884]
+    min-r: [7.469610707744323e-09, 7.49196460425594e-09, 9.060991601472779e-08, 7.49196460425594e-09]
+    max-r: [0.8333082008113062, 1.001951524052534, 0.4429490702753949, 2.0637628059740494]
+    mean-r: [0.0065604454139832355, 0.0064502897806491015, 0.004912983445574995, 0.017685610905050494]
+    (motionbtw) mjy@yygroup-235-4:~/1126Teeth/scripts$ ^C
 
     """
-    rot_move_thres=[]
     gpos_loss_list=[]
     gquat_loss_list=[]
     npss_loss_list=[]
@@ -293,25 +304,32 @@ if __name__ == "__main__":
         # NOTICE:evaluate的结果包含geo的长度,rot_9d
         assert sp_pos.shape[1]+SEQNUM_GEO==sp_pos_new.shape[1]
         # check:
-        stop_idx=pred_n-30+SEQNUM_GEO
-        for kk in range(pred_n-30+SEQNUM_GEO,pred_n+SEQNUM_GEO):
-            pos_check =np.max(torch.abs(sp_pos_new[:,kk]-positions[:,-1]).cpu().numpy(), axis=(0, 1))
-            sp_rot_new2 = sp_rot_new.cpu().numpy()
-            rot2 = rotations.cpu().numpy()
+        stop_idx=pred_n-30+SEQNUM_GEO-1
+        sp_rot_new2 = sp_rot_new.cpu().numpy()
+        rot2 = rotations.cpu().numpy()
+        for kk in range(pred_n-30+SEQNUM_GEO,pred_n+SEQNUM_GEO-1):
+            print("[",kk,"]")
+            pos_check =list(np.max(torch.abs(sp_pos_new[:,kk]-positions[:,-1]).cpu().numpy(), axis=(0, 1)))
             rot_3d = np.zeros((2,28,3))
             for m in range(28):
                     rot_3d[0,m]=process_rotation(sp_rot_new2[0,kk,m])
                     rot_3d[1,m]=process_rotation(rot2[0,-1,m])
             angle_diff = np.abs(rot_3d[0]-rot_3d[1])
-            rot_check = np.max(angle_diff, axis=0)
+            rot_check = list(np.max(angle_diff, axis=0))
+            print(pos_check,rot_check)
             flag= True
-            for thres_idx in range(3):
+            for thres_idx in [0,2]:
+                #print(thres_idx)
                 if pos_check[thres_idx]>pos_move_thres[thres_idx]:
+                    #print("pos big lag")
                     flag=False
                     break
+                #print("pos ok")
                 if rot_check[thres_idx]>rot_move_thres[thres_idx]:
+                    #print("rot big lag")
                     flag=False
                     break
+                #print("rot-ok")
             if flag:
                 stop_idx=kk
                 break
@@ -326,18 +344,63 @@ if __name__ == "__main__":
         new_len = pos_new.shape[1]
         print("reg-loss:",abs(total_len-new_len)," new len:",new_len)
         reg_loss_list.append(abs(total_len-new_len))
+
+        extend_length = 0 if new_len<=total_len else new_len-total_len
+        add_pos=tmp_pos[:,-1]
+        add_rot=tmp_rot9d[:,-1]
+        tpositions_ex=torch.cat([tmp_pos,add_pos.expand([1,extend_length,*add_pos.shape[1:]])],dim=1)
+        trotations_ex=torch.cat([tmp_rot9d,add_rot.expand([1,extend_length,*add_rot.shape[1:]])],dim=1)
+
+        
+        # new turn
+        sparse_trans = new_len -2
+        target_idx = context_len + sparse_trans
+        seq_slice = slice(context_len, target_idx)
+        window_len = sparse_trans+2+SEQNUM_GEO
+        dtype = dataset.dtype
+
+        midway=[]
+        
+        if context_model.INIT_INTERP!="POS-ONLY":
+                inter_pos, inter_rot9d = context_model.get_interp_pos_rot(positions, rotations, seq_slice)
+                inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
+
+        
+        # for sparse
+        sparse_seq=slice(0,new_len)
+        extend_length = 0 if new_len<=total_len else new_len-total_len
+        add_pos=positions[:,-1]
+        add_rot=rot_6d[:,-1]
+        positions_ex=torch.cat([positions,add_pos.expand([1,extend_length,*add_pos.shape[1:]])],dim=1)
+        rotations_ex=torch.cat([rot_6d,add_rot.expand([1,extend_length,*add_rot.shape[1:]])],dim=1)
+        sp_pos=positions_ex[:,sparse_seq].clone().detach()
+        sp_rot=rotations_ex[:,sparse_seq].clone().detach()     # rotations[:,sparse_seq]
+        sp_pos[:,-1]=positions[:,-1]
+        sp_rot[:,-1]=rot_6d[:,-1]
+        # attention mask
+        atten_mask = context_model.get_attention_mask(
+            window_len, context_len, target_idx, device)
+
+        sp_pos_new, sp_rot_new = context_model.evaluate(
+                model, sp_pos, sp_rot, seq_slice,
+                indices, mean, std, atten_mask, post_process=False,geo=geo,inter_x_zs = None)
+        res_slice=slice(seq_slice.start-1,seq_slice.stop+1)
+        
+        pos_new=sp_pos_new[:,res_slice]
+        rot_new=sp_rot_new[:,res_slice]
+        #############################################
         for j in range(remove_len):
             remove_list=remove_idx[j]
             positions[j,:,remove_list,:]=tmp_pos[j,:,remove_list,:]
-            pos_new[j,:,remove_list,:]=tmp_pos[j,:new_len,remove_list,:]
+            pos_new[j,:,remove_list,:]=tpositions_ex[j,:new_len,remove_list,:]
             rotations[j,:,remove_list,:,:]=tmp_rot9d[j,:,remove_list,:,:]
-            rot_new[j,:,remove_list,:,:]=tmp_rot9d[j,:new_len,remove_list,:,:]
+            rot_new[j,:,remove_list,:,:]=trotations_ex[j,:new_len,remove_list,:,:]
         
-        target_idx=pos_new.shape[1]-1
+        target_idx=min(pos_new.shape[1],total_len)-1 
 
         gpos_batch_loss, gquat_batch_loss, npss_batch_loss,w1,npss_batch_losspos,w2= \
             benchmark.get_rmi_style_batch_loss(
-                positions, rotations, pos_new, rot_new, parents,
+                tpositions_ex, trotations_ex, pos_new, rot_new, parents,
                 1, target_idx, mean_rmi, std_rmi)
         w1 = w1 / np.sum(w1)
         w2 = w2 / np.sum(w2)
@@ -360,7 +423,8 @@ if __name__ == "__main__":
         csv_d.append(dense_trans)
         csv_gpos.append(gpos_batch_loss[0])
         csv_gquat.append(gquat_batch_loss[0])
-
+        csv_initn.append(pred_n-30)
+        csv_predn.append(new_len)
         gpos_loss_list.append(gpos_batch_loss[0]*(total_len-2))
         gquat_loss_list.append(gquat_batch_loss[0]*(total_len-2))
         npss_loss_list.append(npss1[0])
@@ -395,6 +459,8 @@ if __name__ == "__main__":
               "sparse_trans":csv_sp,
               "dense_trans":csv_d,
               "gpos":csv_gpos,
-              "gquat":csv_gquat}
+              "gquat":csv_gquat,
+              "init_n":csv_initn,
+              "pred_n":csv_predn}
     df=pd.DataFrame(csv_data)
     df.to_csv(path_csv)

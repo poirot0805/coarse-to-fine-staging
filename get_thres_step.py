@@ -83,7 +83,7 @@ if __name__ == "__main__":
 
     parser.add_argument("-s", "--dataset",
                         help="dataset name (default=test)",
-                        default="train")
+                        default="val")
 
     start_time = time.time()
     args = parser.parse_args()
@@ -123,7 +123,7 @@ if __name__ == "__main__":
             y0=static_ids[j,1]
             n_remove_idx[x0].append(y0)
         remove_idx=n_remove_idx[0]
-        mask = np.ones(x.shape[1], dtype=bool)
+        mask = np.ones(positions.shape[2], dtype=bool)
         mask[remove_idx] = False
 
         positions = positions[:,:, mask, :]
