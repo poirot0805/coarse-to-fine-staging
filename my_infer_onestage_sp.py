@@ -307,7 +307,7 @@ if __name__ == "__main__":
         stop_idx=pred_n-30+SEQNUM_GEO-1
         sp_rot_new2 = sp_rot_new.cpu().numpy()
         rot2 = rotations.cpu().numpy()
-        for kk in range(pred_n-30+SEQNUM_GEO,pred_n+SEQNUM_GEO-1):
+        for kk in range(pred_n-40+SEQNUM_GEO,pred_n+SEQNUM_GEO-1):
             print("[",kk,"]")
             pos_check =list(np.max(torch.abs(sp_pos_new[:,kk]-positions[:,-1]).cpu().numpy(), axis=(0, 1)))
             rot_3d = np.zeros((2,28,3))
