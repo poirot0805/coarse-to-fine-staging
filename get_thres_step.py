@@ -6,6 +6,11 @@ import time
 import argparse
 import pandas as pd
 import numpy as np
+
+import matplotlib.pyplot as plt
+import numpy as np
+from collections import Counter
+
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 package_root = os.path.join(project_root, "packages")
 sys.path.append(package_root)
@@ -83,19 +88,18 @@ if __name__ == "__main__":
 
     parser.add_argument("-s", "--dataset",
                         help="dataset name (default=test)",
-                        default="val")
+                        default="test")
 
     start_time = time.time()
     args = parser.parse_args()
     path_csv=r"/home/mjy/1126Teeth/scripts/infer_{}.csv".format(args.config)
     csv_filename=[]
-    csv_realfn=[]
-    csv_addlen=[]
-    csv_totaln=[]
-    csv_sp=[]
-    csv_d=[]
-    csv_gpos=[]
-    csv_gquat=[]
+    csv_realn = []
+    csv_trans = []
+    csv_avg_pos=[]  # (samples,4)
+    csv_avg_rot=[]  # (samples,4)
+    csv_avg_acc_pos=[]  # (samples,4)
+    csv_avg_acc_rot=[]  # (samples,4)
     config = load_config_by_name(args.config)
 
     context_model.ATTENTION_MODE = config["train"]["attention_mode"]
@@ -106,14 +110,15 @@ if __name__ == "__main__":
     # device="cpu"
     dataset, data_loader = train_utils.init_bvh_dataset(
         config, args.dataset, device=device, shuffle=False,inference_mode=True,add_geo=False)
-    pos_res =[]
-    rot_res =[]
 
     all_frames=0
+    
+    side_tooth_idx = list(range(0,4))+list(range(10,14))+list(range(14,18))+list(range(24,28))
+    center_tooth_idx = list(range(4,10))+list(range(18,24))
     for i, data in enumerate(data_loader, 0):
         (positions, rotations, file_name, real_frame_num,trends,geo,remove_idx,data_idx) = data # FIXED:返回类型(1,seq,joint,3)
-        pos_move = np.zeros((4,3))
-        rot_move = np.zeros((4,3))
+        pos_move = np.zeros(4)
+        rot_move = np.zeros(4)
         file_name=file_name[0]
         print(f"file name:{file_name} idx:{data_idx}")
 
@@ -124,61 +129,235 @@ if __name__ == "__main__":
             y0=static_ids[j,1]
             n_remove_idx[x0].append(y0)
         remove_idx=n_remove_idx[0]
-        mask = np.ones(positions.shape[2], dtype=bool)
-        mask[remove_idx] = False
+        # mask = np.ones(positions.shape[2], dtype=bool)
+        # mask[remove_idx] = False
 
-        positions = positions[:,:, mask, :]
-        rotations = rotations[:,:, mask, :,:]
+        # positions = positions[:,:, mask, :]
+        # rotations = rotations[:,:, mask, :,:]
 
         total_len=positions.shape[1]
         joints = positions.shape[2]
+        csv_realn.append(total_len)
+        csv_trans.append(total_len-1)
+        
         all_frames+=(total_len-2)
         print("total-len:{} real:{}".format(total_len,real_frame_num))
         # 相邻pos的差值
         adj_pos = torch.abs(positions[0,-1]-positions[0,0]).cpu().numpy()
-        print(adj_pos.shape)    # (28，3)
-        adj_pos[adj_pos == 0] = np.nan
-        pos_move[:3,0]=np.nanmin(adj_pos/total_len, axis=0)
-        pos_move[:3,1]=np.nanmax(adj_pos/total_len, axis=0)
-        pos_move[:3,2]=np.nanmean(adj_pos/total_len, axis=0)
+        assert adj_pos.shape[0]==joints and adj_pos.shape[1]==3
+        side_pos = adj_pos[side_tooth_idx]
+        center_pos = adj_pos[center_tooth_idx]
+        # adj_pos[adj_pos == 0] = np.nan
+        pos_move[:3]=np.mean(adj_pos, axis=0)
         inner_dot = np.sqrt(np.sum(adj_pos * adj_pos, axis=1, keepdims=True))
-        pos_move[3,0]=np.nanmin(inner_dot/total_len)
-        pos_move[3,1]=np.nanmax(inner_dot/total_len)
-        pos_move[3,2]=np.nanmean(inner_dot/total_len)
-        pos_res.append(pos_move[np.newaxis,:,:])
+        side_dot = inner_dot[side_tooth_idx]
+        center_dot = inner_dot[center_tooth_idx]
+        pos_move[-1]=np.mean(inner_dot)
+        csv_avg_pos.append(pos_move.tolist())
+        if pos_move.any() > 0.5*(total_len-1):
+            print("***pos_move:",pos_move,"***file_name:",file_name)
+        # pos的差值-sidetooth
+        side_pos_move = np.zeros(4)
+        side_pos_move[:3]=np.mean(side_pos, axis=0)
+        side_pos_move[-1]=np.mean(side_dot)
+        # pos的差值-centertooth
+        center_pos_move = np.zeros(4)
+        center_pos_move[:3]=np.mean(center_pos, axis=0)
+        center_pos_move[-1]=np.mean(center_dot)
+        # total-side+center
+        total_pos_move = side_pos_move+center_pos_move
+        csv_avg_acc_pos.append(total_pos_move.tolist())
         # rot
         rotations = rotations.cpu().numpy()
         rot_3d = np.zeros((2,joints,3))
 
-        for j in range(rotations.shape[2]):
+        for j in range(joints):
             rot_3d[0,j]=process_rotation(rotations[0,-1,j])
             rot_3d[1,j]=process_rotation(rotations[0,0,j])
-        angle_diff = np.abs(rot_3d[1:]-rot_3d[:-1])
+        angle_diff = np.abs(rot_3d[1]-rot_3d[0])
         theta = np.sum(angle_diff,axis=-1)
-        theta_new = theta[:,:,np.newaxis]
+        theta_new = theta[:,np.newaxis]
         adj_rot = np.concatenate((angle_diff,theta_new),axis=-1)
-        adj_rot[adj_rot == 0] = np.nan
-        rot_move[:,0] = np.nanmin(adj_rot/total_len, axis=(0, 1))
-        rot_move[:,1] = np.nanmax(adj_rot/total_len, axis=(0, 1))
-        rot_move[:,2] = np.nanmean(adj_rot/total_len, axis=(0, 1))
-        rot_res.append(rot_move[np.newaxis,:,:])
-        print(pos_res,rot_res)
+        #adj_rot[adj_rot == 0] = np.nan
+        
+        rot_move = np.mean(adj_rot, axis=0)
+        csv_avg_rot.append(rot_move.tolist())
+        side_rot = adj_rot[side_tooth_idx]
+        center_rot = adj_rot[center_tooth_idx]
+        side_rot_move = np.mean(side_rot, axis=0)
+        center_rot_move = np.mean(center_rot, axis=0)
+        total_rot_move = side_rot_move+center_rot_move
+        csv_avg_acc_rot.append(total_rot_move.tolist())
         # rot的差值
-    pos_data = np.concatenate(pos_res,axis=0)
-    rot_data = np.concatenate(rot_res,axis=0)
-    min_pos = [np.nanmin(pos_data[:, i, 0]) for i in range(4)]
-    max_pos = [np.nanmax(pos_data[:, i, 1]) for i in range(4)]
-    mean_pos = [np.nanmean(pos_data[:, i, 2]) for i in range(4)]
     
-    min_rot = [np.nanmin(rot_data[:, i, 0]) for i in range(4)]
-    max_rot = [np.nanmax(rot_data[:, i, 1]) for i in range(4)]
-    mean_rot = [np.nanmean(rot_data[:, i, 2]) for i in range(4)]
-    print("min-pos:",min_pos)
-    print("max-pos:",max_pos)
-    print("mean-pos:",mean_pos)
+    # pos_data = np.concatenate(pos_res,axis=0)
+    # rot_data = np.concatenate(rot_res,axis=0)
+    # min_pos = [np.nanmin(pos_data[:, i, 0]) for i in range(4)]
+    # max_pos = [np.nanmax(pos_data[:, i, 1]) for i in range(4)]
+    # mean_pos = [np.nanmean(pos_data[:, i, 2]) for i in range(4)]
     
-    print("min-r:",min_rot)
-    print("max-r:",max_rot)
-    print("mean-r:",mean_rot)
+    # min_rot = [np.nanmin(rot_data[:, i, 0]) for i in range(4)]
+    # max_rot = [np.nanmax(rot_data[:, i, 1]) for i in range(4)]
+    # mean_rot = [np.nanmean(rot_data[:, i, 2]) for i in range(4)]
+    # print("min-pos:",min_pos)
+    # print("max-pos:",max_pos)
+    # print("mean-pos:",mean_pos)
+    
+    # print("min-r:",min_rot)
+    # print("max-r:",max_rot)
+    # print("mean-r:",mean_rot)
+    
+    # pos-figure1
+    a = np.array(csv_avg_pos)
+    a1 = a[:,0]
+    a2 = a[:,1]
+    a3 = a[:,2]
+    a4 = a[:,3]
+    b = np.array(csv_trans)
+    print("a-len:",len(a1))
+    print(len(b))
+    print(csv_avg_pos[:][0])
+    print(csv_avg_pos[0])
+    # Figure 1: Scatter diagram of a and b
+    plt.figure(figsize=(20,4))
+    plt.subplot(1, 4, 1)
+    plt.scatter(a1, b, s=5)
+    plt.title("Scatter Diagram")
+    plt.xlabel("pos-x")
+    plt.ylabel("number")
+    
+    plt.subplot(1, 4,2)
+    plt.scatter(a2, b, s=5)
+    plt.title("Scatter Diagram")
+    plt.xlabel("pos-y")
+    plt.ylabel("number")
+    
+    plt.subplot(1, 4,3)
+    plt.scatter(a3, b, s=5)
+    plt.title("Scatter Diagram")
+    plt.xlabel("pos-z")
+    plt.ylabel("number")
+    
+    plt.subplot(1, 4,4)
+    plt.scatter(a4, b, s=5)
+    plt.title("Scatter Diagram")    
+    plt.xlabel("pos-len")
+    plt.ylabel("number")
+    plt.savefig('/home/mjy/pos_figure1.png')
+    
+    # pos-figure2
+    # Figure 2: Frequency of a[i]/b[i]
+    ratios1 = np.around(a1 / b,4)
+    freq_ratios1 = Counter(ratios1)
+    ratios2 = np.around(a2 / b,4)
+    freq_ratios2 = Counter(ratios2)
+    ratios3 = np.around(a3 / b,4)
+    freq_ratios3 = Counter(ratios3)
+    ratios4 = np.around(a4 / b,4)
+    freq_ratios4 = Counter(ratios4)
+    plt.figure(figsize=(20,4))
+    plt.subplot(1, 4, 1)
+    plt.scatter(list(freq_ratios1.keys()), list(freq_ratios1.values()), s=5)
+    plt.title("Frequency of x/n")
+    plt.xlabel("Ratio x/n")
+    plt.ylabel("f")
+    
+    plt.subplot(1, 4, 2)
+    plt.scatter(list(freq_ratios2.keys()), list(freq_ratios2.values()), s=5)
+    plt.title("Frequency of y/n")
+    plt.xlabel("Ratio y/n")
+    plt.ylabel("f")
+    
+    plt.subplot(1, 4, 3)
+    plt.scatter(list(freq_ratios3.keys()), list(freq_ratios3.values()), s=5)
+    plt.title("Frequency of z/n")
+    plt.xlabel("Ratio z/n")
+    plt.ylabel("f")
+    
+    plt.subplot(1, 4, 4)
+    plt.scatter(list(freq_ratios4.keys()), list(freq_ratios4.values()), s=5)
+    plt.title("Frequency of len/n")
+    plt.xlabel("Ratio len/n")
+    plt.ylabel("f")
+    plt.savefig('/home/mjy/pos_figure2.png')
+    
+    # Figure 3: Distribution of n
+    freq_n = Counter(b)
+    plt.figure(figsize=(10,20))
+    plt.bar(freq_n.keys(), freq_n.values())
+    plt.title("Distribution of n")
+    plt.xlabel("n")
+    plt.ylabel("Frequency")
+    plt.savefig('/home/mjy/number.png')
+    ##########################################
+    ### rot-figure1
+    a = np.array(csv_avg_rot)
+    a1 = a[:,0]
+    a2 = a[:,1]
+    a3 = a[:,2]
+    a4 = a[:,3]
     
     
+    # Figure 1: Scatter diagram of a and b
+    plt.figure(figsize=(20,4))
+    plt.subplot(1, 4, 1)
+    plt.scatter(a1, b, s=5)
+    plt.title("Scatter Diagram-a")
+    plt.xlabel("rot-x")
+    plt.ylabel("number")
+    
+    plt.subplot(1, 4,2)
+    plt.scatter(a2, b, s=5)
+    plt.title("Scatter Diagram-b")
+    plt.xlabel("rot-y")
+    plt.ylabel("number")
+    
+    plt.subplot(1, 4,3)
+    plt.scatter(a3, b, s=5)
+    plt.title("Scatter Diagram-c")
+    plt.xlabel("rot-z")
+    plt.ylabel("number")
+    
+    plt.subplot(1, 4,4)
+    plt.scatter(a4, b, s=5)
+    plt.title("Scatter Diagram-r")    
+    plt.xlabel("rot-len")
+    plt.ylabel("number")
+    plt.savefig('/home/mjy/rot_figure1.png')
+    
+    # pos-figure2
+    # Figure 2: Frequency of a[i]/b[i]
+    ratios1 = np.around(a1 / b,4)
+    freq_ratios1 = Counter(ratios1)
+    ratios2 = np.around(a2 / b,4)
+    freq_ratios2 = Counter(ratios2)
+    ratios3 = np.around(a3 / b,4)
+    freq_ratios3 = Counter(ratios3)
+    ratios4 = np.around(a4 / b,4)
+    freq_ratios4 = Counter(ratios4)
+    print(list(freq_ratios1.keys()), list(freq_ratios1.values()))
+    plt.figure(figsize=(20,4))
+    plt.subplot(1, 4, 1)
+    plt.scatter(list(freq_ratios1.keys()), list(freq_ratios1.values()), s=5)
+    plt.title("Frequency of a/n")
+    plt.xlabel("Ratio a/n")
+    plt.ylabel("f")
+    
+    plt.subplot(1, 4, 2)
+    plt.scatter(list(freq_ratios2.keys()), list(freq_ratios2.values()), s=5)
+    plt.title("Frequency of b/n")
+    plt.xlabel("Ratio b/n")
+    plt.ylabel("f")
+    
+    plt.subplot(1, 4, 3)
+    plt.scatter(list(freq_ratios3.keys()), list(freq_ratios3.values()), s=5)
+    plt.title("Frequency of c/n")
+    plt.xlabel("Ratio c/n")
+    plt.ylabel("f")
+    
+    plt.subplot(1, 4, 4)
+    plt.scatter(list(freq_ratios4.keys()), list(freq_ratios4.values()), s=5)
+    plt.title("Frequency of r/n")
+    plt.xlabel("Ratio r/n")
+    plt.ylabel("f")
+    plt.savefig('/home/mjy/rot_figure2.png')
