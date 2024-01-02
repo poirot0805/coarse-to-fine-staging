@@ -202,7 +202,10 @@ class BvhDataSet(Dataset):
             
             positions=torch.cat([positions,add_pos.expand([add_len,*add_pos.shape[1:]])],dim=0)
             rotations=torch.cat([rotations,add_rot.expand([add_len,*add_rot.shape[1:]])],dim=0)
-
+            target_pos = self.positions[idx][-1:]
+            target_rot = self.rotations[idx][-1:]
+            positions=torch.cat([positions,target_pos],dim=0)
+            rotations=torch.cat([rotations,target_rot],dim=0)
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
             b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
@@ -255,6 +258,10 @@ class BvhDataSet(Dataset):
                 add_rot=self.rotations[i][end_idx-1:end_idx]
                 positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
                 rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
+            target_pos = self.positions[i][-1:]
+            target_rot = self.rotations[i][-1:]
+            positions=torch.cat([positions,target_pos],dim=0)
+            rotations=torch.cat([rotations,target_rot],dim=0)
             # trends mask
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
@@ -271,9 +278,9 @@ class BvhDataSet(Dataset):
             for k in self.remove_list[i]:
                 remove_idx[k]=True
                 
-            assert positions.shape[0]==self.window and positions.shape[2]==3
-            assert rotations.shape[0]==self.window and rotations.shape[2]==3
-            assert trends.shape[0]==self.window 
+            assert positions.shape[0]==self.window+1 and positions.shape[2]==3
+            assert rotations.shape[0]==self.window+1 and rotations.shape[2]==3
+             
             return (
                 positions,
                 rotations,
@@ -287,6 +294,7 @@ class BvhDataSet(Dataset):
 
 
 class ValToothDataSet(Dataset):
+    
     def __init__(self, bvh_folder,  window=50, offset=1,
                  start_frame=0, fill_mode="missing-zero",device="cpu", dtype=torch.float32,complete_flag=False, augment_flag=True,add_geo=True):
         """
@@ -437,6 +445,10 @@ class ValToothDataSet(Dataset):
                 add_rot=self.rotations[i][end_idx-1:end_idx]
                 positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
                 rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
+            target_pos = self.positions[i][-1:]
+            target_rot = self.rotations[i][-1:]
+            positions=torch.cat([positions,target_pos],dim=0)
+            rotations=torch.cat([rotations,target_rot],dim=0)
             # trends mask
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
@@ -453,9 +465,9 @@ class ValToothDataSet(Dataset):
             for k in self.remove_list[i]:
                 remove_idx[k]=True
                 
-            assert positions.shape[0]==self.window and positions.shape[2]==3
-            assert rotations.shape[0]==self.window and rotations.shape[2]==3
-            assert trends.shape[0]==self.window 
+            assert positions.shape[0]==self.window+1 and positions.shape[2]==3
+            assert rotations.shape[0]==self.window+1 and rotations.shape[2]==3
+            
             return (
                 positions,
                 rotations,

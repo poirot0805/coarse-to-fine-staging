@@ -194,7 +194,7 @@ def get_data_mask_sp(window_len, d_mask, constrained_slices,
     # print("get_data_mask_constraint:{}".format(constrained_slices))
     data_mask = torch.zeros((window_len, 28,d_mask), device=device, dtype=dtype)
     data_mask[:context_len,:, :] = 1
-    #data_mask[target_idx, :,:] = 1
+    # data_mask[target_idx, :,:] = 1
     # NOTICE: 可以设置config中的d_mask和constrained_slice来固定特定牙齿位置
     for s in constrained_slices:
         # print("get_data_mask:{}".format(s))
@@ -264,6 +264,7 @@ def set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice):
                 end_idx - start_idx - 1
         )
     return x
+
 def set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets, mean,std):
     # set root position of missing part to linear interpolation of
     # root position between constrained frames (i.e. last context frame,
@@ -301,6 +302,7 @@ def set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets
         
         x[...,i,:,p_slice] = a + indicator
     return x
+
 def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
     global SEQNUM_GEO
     constrained_frames = [seq_slice.start - 1, seq_slice.stop]
@@ -431,7 +433,6 @@ def train(config):
     f_loss_avg = 0
 
     min_benchmark_loss = float("inf")
-    min_val_loss = float("inf")
     inter_pos,inter_rot9d,inter_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
@@ -534,7 +535,6 @@ def train(config):
                 x[...,:12,-1]=2
             tgt_pose = x_gt_zscore[...,-1:,:,:] #BUG
             x = set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets, mean,std)#BUG
-           
             #x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
             if INIT_INTERP!="POS-ONLY":
                 x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
@@ -661,7 +661,7 @@ def train(config):
                     ])
 
                 if iteration % eval_interval == 0:
-                    benchmark_loss = 0
+                    
                     for trans in eval_trans:
                         print("trans: {}\n".format(trans))
 
@@ -693,7 +693,7 @@ def train(config):
                                 # sum of losses on dataset named "benchmark"
                                 # with transition length equals to last value
                                 # in eval_interval.
-                                benchmark_loss += (gpos_loss + gquat_loss +
+                                benchmark_loss = (gpos_loss + gquat_loss +
                                                   npss_loss)
 
                     if min_benchmark_loss > benchmark_loss:
@@ -703,7 +703,6 @@ def train(config):
                             config, model, epoch, iteration,
                             optimizer, scheduler, suffix=f".{iteration}min")
                 if iteration % (eval_interval*10)==0:
-                    val_total_loss=0
                     for i in range(len(val_dataloaders)):
                             ds_name = "val"
                             ds_loader = val_dataloaders[i]
@@ -723,15 +722,10 @@ def train(config):
                                 [ds_name, "val_s_{}".format(trans),
                                  val_smoothloss], 
                             ])
-                            val_total_loss+= (gpos_loss+gquat_loss+npss_loss)
                             print("{}-{}:\ngpos: {:6f}, gquat: {:6f}, "
                                   "npss: {:.6f}, p_loss: {:.6f}, smooth_loss: {:.6f}".format(ds_name, trans, gpos_loss,
                                                         gquat_loss, npss_loss,val_ploss,val_smoothloss))
-                    if min_val_loss>val_total_loss:
-                        min_val_loss = val_total_loss
-                        train_utils.save_checkpoint(
-                            config, model, epoch, iteration,
-                            optimizer, scheduler, suffix=f".{iteration}val_min")    
+                        
                 train_utils.to_visdom(vis, info_idx, contents)
                 r_loss_avg = 0
                 p_loss_avg = 0
@@ -986,10 +980,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
 
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
-        tgt_pose = x_zscore[...,-1:,:,:] #BUG
-        x = set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets, mean,std)#BUG
-            
-        #x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
+        x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
         if INIT_INTERP!="POS-ONLY":
             x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
         # calculate model output y
