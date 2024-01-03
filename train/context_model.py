@@ -274,6 +274,8 @@ def set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets
     constrained_frames = [seq_slice.start - 1]
     constrained_frames.extend(midway_targets)
     constrained_frames.sort()
+    mean = mean[...,p_slice]
+    std = std[...,p_slice]
     for i in range(len(constrained_frames) - 1):
         start_idx = constrained_frames[i]
         end_idx = constrained_frames[i + 1]
@@ -496,12 +498,12 @@ def train(config):
 
             # attention mask
             atten_mask = get_attention_mask(
-                window_len, context_len, target_idx, device,
+                window_len+1, context_len, target_idx, device,
                 midway_targets=midway_targets)
             
             # data mask
             data_mask = get_data_mask_sp(
-                window_len, model.d_mask, model.constrained_slices,
+                window_len+1, model.d_mask, model.constrained_slices,
                 context_len, target_idx, device, dtype, midway_targets)#FIXME
 
             # position index relative to context and target frame
@@ -775,7 +777,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     
     # attention mask
     atten_mask = get_attention_mask(
-        window_len, context_len, target_idx, device)
+        window_len+1, context_len, target_idx, device)
 
     data_indexes = []
     gpos_loss = []
