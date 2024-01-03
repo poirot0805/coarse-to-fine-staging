@@ -396,6 +396,7 @@ def train(config):
         SEQNUM_GEO = 0
     if TGT_condition:
         SEQNUM_GEO+=1
+    print("seqnum_geo:",SEQNUM_GEO)
     window_len = config["datasets"]["train"]["window"] + SEQNUM_GEO
     context_len = config["train"]["context_len"] + SEQNUM_GEO
     fill_mode = config["datasets"]["train"]["fill_mode"]
