@@ -18,6 +18,7 @@ ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
 INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
 Data_Mask_MODE = 1  # //0: no data mask //1: normal //2: geo mask =2
+framework_MODE = "in" # "pred"
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
     assert geo.shape[-1]==9
@@ -190,11 +191,13 @@ def get_data_mask(window_len, d_mask, constrained_slices,
 def get_data_mask_sp(window_len, d_mask, constrained_slices,
                   context_len, target_idx, device, dtype,
                   midway_targets=()):
+    global framework_MODE
     # 0 for unknown and 1 for known
     # print("get_data_mask_constraint:{}".format(constrained_slices))
     data_mask = torch.zeros((window_len, 28,d_mask), device=device, dtype=dtype)
     data_mask[:context_len,:, :] = 1
-    #data_mask[target_idx, :,:] = 1
+    if framework_MODE=="in":
+        data_mask[target_idx, :,:] = 1
     # NOTICE: 可以设置config中的d_mask和constrained_slice来固定特定牙齿位置
     for s in constrained_slices:
         # print("get_data_mask:{}".format(s))
@@ -246,62 +249,31 @@ def set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice):
     # set root position of missing part to linear interpolation of
     # root position between constrained frames (i.e. last context frame,
     # midway target frames and target frame).
-    p_slice = slice(6,9)
-    constrained_frames = [seq_slice.start - 1, seq_slice.stop]
-    constrained_frames.extend(midway_targets)
-    constrained_frames.sort()
-    for i in range(len(constrained_frames) - 1):
-        start_idx = constrained_frames[i]
-        end_idx = constrained_frames[i + 1]
-        start_slice = slice(start_idx, start_idx + 1)
-        end_slice = slice(end_idx, end_idx + 1)
-        inbetween_slice = slice(start_idx + 1, end_idx)
+    global framework_MODE
+    if framework_MODE=="pred":
+        p_slice=slice(0,9)
+        length = x[:,seq_slice].shape[1]
+        expanded_tensor = x[:,seq_slice.start-1:seq_slice.start].expand(-1, length, -1, -1)
+        x[:,seq_slice,:,p_slice]=expanded_tensor[...,p_slice].clone()
+    else:
+        p_slice = slice(6,9)
+        constrained_frames = [seq_slice.start - 1, seq_slice.stop]
+        constrained_frames.extend(midway_targets)
+        constrained_frames.sort()
+        for i in range(len(constrained_frames) - 1):
+            start_idx = constrained_frames[i]
+            end_idx = constrained_frames[i + 1]
+            start_slice = slice(start_idx, start_idx + 1)
+            end_slice = slice(end_idx, end_idx + 1)
+            inbetween_slice = slice(start_idx + 1, end_idx)
 
-        x[..., inbetween_slice,:, p_slice] = \
-            benchmark.get_linear_interpolation2(
-                x[..., start_slice,:, p_slice],
-                x[..., end_slice,:,p_slice],
-                end_idx - start_idx - 1
-        )
-    return x
-def set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets, mean,std):
-    # set root position of missing part to linear interpolation of
-    # root position between constrained frames (i.e. last context frame,
-    # midway target frames and target frame).
-    # x: (batch,seq,joint,9)
-    # tgt_pose:(batch,1,joint,9)
-    p_slice = slice(6,9)
-    constrained_frames = [seq_slice.start - 1]
-    constrained_frames.extend(midway_targets)
-    constrained_frames.sort()
-    mean = mean[...,p_slice]
-    std = std[...,p_slice]
-    for i in range(len(constrained_frames) - 1):
-        start_idx = constrained_frames[i]
-        end_idx = constrained_frames[i + 1]
-        start_slice = slice(start_idx, start_idx + 1)
-        end_slice = slice(end_idx, end_idx + 1)
-        inbetween_slice = slice(start_idx + 1, end_idx)
-
-        x[..., inbetween_slice,:, p_slice] = \
-            benchmark.get_linear_interpolation2(
-                x[..., start_slice,:, p_slice],
-                x[..., end_slice,:,p_slice],
-                end_idx - start_idx - 1
-        )
-    last_idx = constrained_frames[-1]
-    tgt_idx = seq_slice.stop
-    # y_new = [(x+0.2)-mean] / std
-    for i in range(last_idx+1,tgt_idx):
-        a = x[...,i-1,:,p_slice]
-        b = tgt_pose[...,0,:,p_slice]
-        
-        indicator = torch.zeros_like(a)
-        indicator[a < b] = 0.2
-        indicator[a > b] = -0.2
-        indicator = (indicator-mean)/std
-        
-        x[...,i,:,p_slice] = a + indicator
+            x[..., inbetween_slice,:, p_slice] = \
+                benchmark.get_linear_interpolation2(
+                    x[..., start_slice,:, p_slice],
+                    x[..., end_slice,:,p_slice],
+                    end_idx - start_idx - 1
+            )
+    
     return x
 def get_interp_pos_rot(pos,rot9d,seq_slice, midway_targets=[]):
     global SEQNUM_GEO
@@ -362,11 +334,17 @@ def train(config):
     global SEQNUM_GEO
     global zscore_MODE
     global Data_Mask_MODE
+    global framework_MODE
     ATTENTION_MODE = config["train"]["attention_mode"]
     INIT_INTERP = config["train"]["init_interp"]
     zscore_MODE = config["train"]["zscore_MODE"]    # normal/none/seq
     Data_Mask_MODE = config["train"]["data_mask_set"] 
-    print(ATTENTION_MODE,INIT_INTERP,zscore_MODE)
+    framework_MODE = config["train"]["framework_MODE"] # in/pred
+    print("attention:",ATTENTION_MODE,
+          "init:",INIT_INTERP,
+          "zscore:",zscore_MODE,
+          "frame:",framework_MODE,
+          "data_mask:",Data_Mask_MODE)
     indices = config["indices"]
     info_interval = config["visdom"]["interval"]
     eval_interval = config["visdom"]["interval_eval"]
@@ -377,7 +355,7 @@ def train(config):
     p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
     c_slice = slice(indices["c_start_idx"], indices["c_end_idx"])
 
-    device = torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
+    device = torch.device(config["train"]["device"])#torch.device("cuda:3" if torch.cuda.is_available() else "cpu")
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
@@ -439,16 +417,21 @@ def train(config):
         for i, data in enumerate(data_loader, 0):
             (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
             # trans
-            min_trans = min(frame_nums)-2
-            prob =random.uniform(0,1)
-            trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
-            trans_len = max_trans if trans_len>max_trans else trans_len
+            # min_trans = min(frame_nums)-2
+            # prob =random.uniform(0,1)
+            # trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
+            # trans_len = max_trans if trans_len>max_trans else trans_len
+            trans_len = random.randint(min_trans, max_trans)
+            
             target_idx = context_len + trans_len
             seq_slice = slice(context_len, target_idx)
             
             # get random midway target frames
-            midway_targets = get_midway_targets(
-                seq_slice, midway_targets_amount, midway_targets_p)
+            if framework_MODE=="in":
+                midway_targets = get_midway_targets(
+                    seq_slice, midway_targets_amount, midway_targets_p)
+            else:
+                midway_targets=[]
             if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice, midway_targets)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
@@ -498,12 +481,12 @@ def train(config):
 
             # attention mask
             atten_mask = get_attention_mask(
-                window_len+1, context_len, target_idx, device,
+                window_len, context_len, target_idx, device,
                 midway_targets=midway_targets)
             
             # data mask
             data_mask = get_data_mask_sp(
-                window_len+1, model.d_mask, model.constrained_slices,
+                window_len, model.d_mask, model.constrained_slices,
                 context_len, target_idx, device, dtype, midway_targets)#FIXME
 
             # position index relative to context and target frame
@@ -534,10 +517,7 @@ def train(config):
                 ], dim=-1)
             if Data_Mask_MODE==2:
                 x[...,:12,-1]=2
-            tgt_pose = x_gt_zscore[...,-1:,:,:] #BUG
-            x = set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets, mean,std)#BUG
-           
-            #x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
+            x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
             if INIT_INTERP!="POS-ONLY":
                 x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
             # calculate model output y
@@ -777,7 +757,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     
     # attention mask
     atten_mask = get_attention_mask(
-        window_len+1, context_len, target_idx, device)
+        window_len, context_len, target_idx, device)
 
     data_indexes = []
     gpos_loss = []
@@ -988,10 +968,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
 
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
-        tgt_pose = x_zscore[...,-1:,:,:] #BUG
-        x = set_placeholder_root_pos_sp_prediction(x, tgt_pose,seq_slice, midway_targets, mean,std)#BUG
-            
-        #x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
+        x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
         if INIT_INTERP!="POS-ONLY":
             x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
         # calculate model output y
