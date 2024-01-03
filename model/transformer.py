@@ -71,9 +71,10 @@ class TeethPositionalBias(nn.Module):
         return qk_dots + self.bias[..., :i,:j]
     
 class AlibiPositionalBias(nn.Module):
-    def __init__(self, heads, **kwargs):
+    def __init__(self, heads,mask_len, **kwargs):
         super().__init__()
         self.heads = heads
+        self.mask_len = mask_len
         slopes = torch.Tensor(self._get_slopes(heads))
         slopes = rearrange(slopes, 'h -> h 1 1')
         self.register_buffer('slopes', slopes, persistent = False)
@@ -83,8 +84,8 @@ class AlibiPositionalBias(nn.Module):
         i_arange = torch.arange(256, device = device)
         j_arange = torch.arange(256, device = device)
         bias = -(rearrange(j_arange, 'j -> 1 1 1 j') - rearrange(i_arange, 'i -> 1 1 i 1'))
-        bias[...,:,:12]=0 # new
-        bias[...,:12,:]=0   # new
+        bias[...,:,:self.mask_len]=0 # new
+        bias[...,:self.mask_len,:]=0   # new
         return bias
 
     @staticmethod
@@ -313,7 +314,7 @@ class SPMultiHeadedAttention(nn.Module):
 
 class AlibiMultiHeadedAttention(nn.Module):
     def __init__(self, n_head, d_model, d_head, dropout=0.1,
-                 pre_lnorm=True, bias=False):
+                 pre_lnorm=True, bias=False,alibi_mask_len=12):
         """
         Multi-headed attention of vanilla transformer with memory mechanism.
 
@@ -351,7 +352,7 @@ class AlibiMultiHeadedAttention(nn.Module):
         self.atten_dropout_layer = nn.Dropout(dropout)
 
         self.layer_norm = nn.LayerNorm(d_model)
-        self.alibi_pos = AlibiPositionalBias(n_head)
+        self.alibi_pos = AlibiPositionalBias(n_head,alibi_mask_len)
 
     def forward(self, hidden, memory=None, mask=None):
         """

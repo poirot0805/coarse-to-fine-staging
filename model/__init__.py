@@ -15,7 +15,7 @@ class STTransformer(nn.Module):
         self.dropout = config["dropout"]
         self.pre_lnorm = config["pre_lnorm"]
         self.n_layer = config["n_layer"]
-
+        self.alibi_mask_len = config["alibi_mask_len"]
         """
         "d_encoder_in":10,
         "d_encoder_h":16,
@@ -73,7 +73,8 @@ class STTransformer(nn.Module):
                     self.config["n_head"], self.config["d_model"],
                     self.config["d_head"], dropout=self.config["dropout"],
                     pre_lnorm=self.config["pre_lnorm"],
-                    bias=self.config["atten_bias"]
+                    bias=self.config["atten_bias"],
+                    alibi_mask_len = self.alibi_mask_len
                 )
             )
 

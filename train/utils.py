@@ -51,9 +51,9 @@ def save_checkpoint(config, model, epoch, iteration, optimizer,
 
 
 def init_bvh_dataset(config, dataset_name, device,
-                     shuffle=True, dtype=torch.float32,inference_mode=False,add_geo=False):
+                     shuffle=True, dtype=torch.float32,inference_mode=False,add_geo=False,add_tgt=False):
     dataset = loader.BvhDataSet(**config["datasets"][dataset_name],
-                                device=device, dtype=dtype,add_geo=add_geo,inference_mode=inference_mode)
+                                device=device, dtype=dtype,add_geo=add_geo,add_tgt=add_tgt,inference_mode=inference_mode)
     print("{} clips in dataset.".format(len(dataset)))
     if inference_mode:
         data_loader = DataLoader(dataset, batch_size=1, shuffle=shuffle)
@@ -65,7 +65,7 @@ def init_bvh_dataset(config, dataset_name, device,
 
 def get_benchmark_datasets(config, device,
                            exclude=("train", "train_stats", "bench_stats","test"),
-                           shuffle=False, dtype=torch.float32,add_geo=False):
+                           shuffle=False, dtype=torch.float32,add_geo=False,add_tgt=False):
     dataset_names = []
     datasets = []
     dataset_loaders = []
@@ -75,18 +75,18 @@ def get_benchmark_datasets(config, device,
             continue
         else:
             ds, dl = init_bvh_dataset(
-                config, dataset_name, device, shuffle, dtype,add_geo=add_geo)
+                config, dataset_name, device, shuffle, dtype,add_geo=add_geo,add_tgt=add_tgt)
             dataset_names.append(dataset_name)
             datasets.append(ds)
             dataset_loaders.append(dl)
     return dataset_names, datasets, dataset_loaders
 
-def get_val_datasets(config, device,trans_list,shuffle=False, dtype=torch.float32,add_geo=False):
+def get_val_datasets(config, device,trans_list,shuffle=False, dtype=torch.float32,add_geo=False,add_tgt=False):
     dataset_loaders = []
     datasets = []
     for trans in trans_list:
         dataset = loader.ValToothDataSet(bvh_folder=config["datasets"]["benchmark"]["bvh_folder"],  window=trans+2, offset=1,
-                 start_frame=0, fill_mode="vacant-mean",device=device, dtype=dtype,add_geo=add_geo)
+                 start_frame=0, fill_mode="vacant-mean",device=device, dtype=dtype,add_geo=add_geo,add_tgt=add_tgt)
         print("{} clips in val-dataset.".format(len(dataset)))
         data_loader = DataLoader(dataset, batch_size=config["train"]["batch_size"],shuffle=shuffle)
         datasets.append(dataset)

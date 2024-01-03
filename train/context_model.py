@@ -19,6 +19,7 @@ INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
 Data_Mask_MODE = 1  # //0: no data mask //1: normal //2: geo mask =2
 framework_MODE = "in" # "pred"
+TGT_condition = False # True or False在pred模式下是否使用tgt作为输入
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
     assert geo.shape[-1]==9
@@ -335,16 +336,19 @@ def train(config):
     global zscore_MODE
     global Data_Mask_MODE
     global framework_MODE
+    global TGT_condition
     ATTENTION_MODE = config["train"]["attention_mode"]
     INIT_INTERP = config["train"]["init_interp"]
     zscore_MODE = config["train"]["zscore_MODE"]    # normal/none/seq
     Data_Mask_MODE = config["train"]["data_mask_set"] 
     framework_MODE = config["train"]["framework_MODE"] # in/pred
+    TGT_condition = config["train"]["add_tgt"]
     print("attention:",ATTENTION_MODE,
           "init:",INIT_INTERP,
           "zscore:",zscore_MODE,
           "frame:",framework_MODE,
-          "data_mask:",Data_Mask_MODE)
+          "data_mask:",Data_Mask_MODE,
+          "add_tgt:",TGT_condition)
     indices = config["indices"]
     info_interval = config["visdom"]["interval"]
     eval_interval = config["visdom"]["interval_eval"]
@@ -359,13 +363,13 @@ def train(config):
 
     # dataset
     dataset, data_loader = train_utils.init_bvh_dataset(
-        config, "train", device, shuffle=True,add_geo=config["train"]["add_geo"])  # FIXED:数据集载入
+        config, "train", device, shuffle=True,add_geo=config["train"]["add_geo"],add_tgt=TGT_condition)  # FIXED:数据集载入
     dtype = dataset.dtype
 
     bench_dataset_names, _, bench_data_loaders = \
-        train_utils.get_benchmark_datasets(config, device, shuffle=False,add_geo=config["train"]["add_geo"])   # FIXED:验证集载入
+        train_utils.get_benchmark_datasets(config, device, shuffle=False,add_geo=config["train"]["add_geo"],add_tgt=TGT_condition)   # FIXED:验证集载入
 
-    _,val_dataloaders = train_utils.get_val_datasets(config,device,eval_trans,shuffle=False, dtype=dataset.dtype,add_geo=config["train"]["add_geo"])
+    _,val_dataloaders = train_utils.get_val_datasets(config,device,eval_trans,shuffle=False, dtype=dataset.dtype,add_geo=config["train"]["add_geo"],add_tgt=TGT_condition)
     # visualization
     vis, info_idx = train_utils.init_visdom(config)
 
@@ -390,6 +394,8 @@ def train(config):
         SEQNUM_GEO = 12
     else:
         SEQNUM_GEO = 0
+    if TGT_condition:
+        SEQNUM_GEO+=1
     window_len = config["datasets"]["train"]["window"] + SEQNUM_GEO
     context_len = config["train"]["context_len"] + SEQNUM_GEO
     fill_mode = config["datasets"]["train"]["fill_mode"]
@@ -415,7 +421,11 @@ def train(config):
     inter_pos,inter_rot9d,inter_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
-            (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+            if TGT_condition:
+                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+            else:
+                (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+            assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
             # trans
             # min_trans = min(frame_nums)-2
             # prob =random.uniform(0,1)
@@ -437,6 +447,7 @@ def train(config):
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
                 assert (inter_pos==positions).all()==False
             rot_6d = data_utils.matrix9D_to_6D_torch(rotations) # get-input需要的是6d
+            tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)
             if add_geo_FLAG:
                 trends=torch.cat([torch.zeros([trends.shape[0],SEQNUM_GEO,trends.shape[-1]],dtype=dtype,device=device),
                                 trends],
@@ -456,6 +467,9 @@ def train(config):
                 remove_list=remove_idx[j]
                 positions[j,:,remove_list,:]=fill_value_p[remove_list,:]
                 rot_6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
+                # for target condition
+                tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
+                tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
                 if add_geo_FLAG:
                     geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                     geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
@@ -494,7 +508,7 @@ def train(config):
                 window_len, seq_slice, dtype, device)
 
             # prepare model input
-            x_gt = get_model_input_sp(positions, rot_6d)#FIXME
+            x_gt = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rot_6d],dim=1))#FIXME
             x_gt_zscore = (x_gt - mean) / std
             if add_geo_FLAG:
                 geo_ctrl = geo#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)#FIXME
@@ -538,7 +552,7 @@ def train(config):
                 y = y * std + mean
             #y = get_model_input(y[...,6:],y[...,:6])
 
-            if add_geo_FLAG:
+            if add_geo_FLAG or TGT_condition:
                 positions = torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),
                                         positions],
                                         dim=1
@@ -736,6 +750,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
                     debug=False, post_process=False):
     global INIT_INTERP
     global SEQNUM_GEO
+    global TGT_condition
     device = data_loader.dataset.device
     dtype = data_loader.dataset.dtype
     window_len = data_loader.dataset.window + SEQNUM_GEO
@@ -768,14 +783,20 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     p_loss_avg = []
     smooth_loss_avg = []
     add_geo_FLAG = config["train"]["add_geo"]
-    if add_geo_FLAG==False:
+    if add_geo_FLAG==False and TGT_condition==False:
         assert SEQNUM_GEO==0
     for i, data in enumerate(data_loader, 0):
-        (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data # FIXED:返回类型
+        if TGT_condition:
+                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+        else:
+                (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+        assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
+        
         if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
         rot_6d = data_utils.matrix9D_to_6D_torch(rotations)
+        tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)
         if add_geo_FLAG==False:
             geo = None
         # switch torch.tensor to list of list
@@ -792,6 +813,9 @@ def eval_on_dataset(config, data_loader, model, trans_len,
             remove_list=remove_idx[j]
             positions[j,:,remove_list,:]=fill_value_p[remove_list,:]
             rot_6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
+            
+            tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
+            tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
             if add_geo_FLAG:
                 geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                 geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
@@ -804,10 +828,12 @@ def eval_on_dataset(config, data_loader, model, trans_len,
                 inter_x_zs = (inter_x - mean) / std
         # notice: rotations参与计算loss了
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
+        tgt_rot = data_utils.matrix6D_to_9D_torch(tgt_rot6d)
         pos_new, rot_new = evaluate(
             model, positions, rot_6d, seq_slice,
-            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None)
-        if add_geo_FLAG:
+            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None,tgt_pos=tgt_pos,tgt_rot6d=tgt_rot6d)
+        
+        if add_geo_FLAG or TGT_condition:
             positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
             rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
         
@@ -860,8 +886,10 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
 def evaluate(model, positions, rotations, seq_slice, indices,
              mean, std, atten_mask, post_process=False,
-             midway_targets=(),geo=None,inter_x_zs=None):
+             midway_targets=(),geo=None,inter_x_zs=None,
+             tgt_pos = None, tgt_rot6d=None):
     """
+    rotations : rot6d
     Generate transition animation.
 
     positions and rotation should already been preprocessed using
@@ -909,10 +937,10 @@ def evaluate(model, positions, rotations, seq_slice, indices,
     global SEQNUM_GEO
     dtype = positions.dtype
     device = positions.device
-    window_len = positions.shape[-3]+SEQNUM_GEO if geo is not None else positions.shape[-3]
+    window_len = positions.shape[-3]+SEQNUM_GEO if geo is not None or tgt_pos is not None else positions.shape[-3]
     context_len = seq_slice.start
     target_idx = seq_slice.stop
-
+    print("pos shape:",positions.shape[-3],"window-len:",window_len)
     rp_slice = slice(indices["r_start_idx"], indices["p_end_idx"])
     # If current context model is not trained with constrants,
     # ignore midway_targets.
@@ -934,7 +962,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
 
         # prepare model input          
         geo_ctrl=None
-        x_orig = get_model_input_sp(positions, rotations)#FIXME
+        x_orig = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rotations],dim=1)) if tgt_pos is not None else get_model_input_sp(positions,rotations)
         x_zscore = (x_orig - mean) / std
         if geo is not None:
             geo_ctrl=geo #FIXME#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
@@ -989,7 +1017,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         # notice: 原来的版本中rotations一直是9D的，新版本输入evaluation的是6D的，因此转化一下
         rotations = data_utils.matrix6D_to_9D_torch(rotations)
         # GEO:
-        if geo is not None:
+        if geo is not None or tgt_pos is not None:
             positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
             rotations=torch.cat([torch.zeros([rotations.shape[0],SEQNUM_GEO,*rotations.shape[2:]],dtype=dtype,device=device),rotations],dim=1) # GEO
         # new pos and rot

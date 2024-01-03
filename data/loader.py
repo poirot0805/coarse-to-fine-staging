@@ -10,7 +10,9 @@ from motion_inbetween_space.data import bvh, utils_np
 
 class BvhDataSet(Dataset):
     def __init__(self, bvh_folder, actors, window=50, offset=1,
-                 start_frame=0, fill_mode="missing-zero",device="cpu", dtype=torch.float32,complete_flag=False, augment_flag=True,add_geo=True,inference_mode=False):
+                 start_frame=0, fill_mode="missing-zero",device="cpu", 
+                 dtype=torch.float32,complete_flag=False, augment_flag=True,
+                 add_geo=True,add_tgt=False,inference_mode=False):
         """
         Bvh data set.
 
@@ -37,6 +39,7 @@ class BvhDataSet(Dataset):
         self.augment=augment_flag
         self.inference_mode=inference_mode
         self.add_geo=add_geo
+        self.add_tgt=add_tgt
         self.primes=[]
         self.fill_mode=fill_mode    # 0:missing-zero 1:missing-mean 2:vacant-mean
         print(f"complete:{complete_flag} augment:{augment_flag} add_geo:{add_geo} fill_mode:{self.fill_mode}")
@@ -56,7 +59,7 @@ class BvhDataSet(Dataset):
         else:
             self.bvh_folder=[os.path.join(bvh_folder,"complete"),os.path.join(bvh_folder,"incomplete")]
         # self.load_bvh_files()
-        json_root=r"/home/mjy/motion-inbetween"# r"E:\PROJECTS\tooth_spatial_temporal_transformer"
+        json_root=r"/home/mjy/teeth"# r"E:\PROJECTS\tooth_spatial_temporal_transformer"
         mode=['test','train','val']
         self.remove_dict={}
         for subdir in mode:
@@ -202,10 +205,7 @@ class BvhDataSet(Dataset):
             
             positions=torch.cat([positions,add_pos.expand([add_len,*add_pos.shape[1:]])],dim=0)
             rotations=torch.cat([rotations,add_rot.expand([add_len,*add_rot.shape[1:]])],dim=0)
-            target_pos = self.positions[idx][-1:]
-            target_rot = self.rotations[idx][-1:]
-            positions=torch.cat([positions,target_pos],dim=0)
-            rotations=torch.cat([rotations,target_rot],dim=0)
+
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
             b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
@@ -258,10 +258,6 @@ class BvhDataSet(Dataset):
                 add_rot=self.rotations[i][end_idx-1:end_idx]
                 positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
                 rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
-            target_pos = self.positions[i][-1:]
-            target_rot = self.rotations[i][-1:]
-            positions=torch.cat([positions,target_pos],dim=0)
-            rotations=torch.cat([rotations,target_rot],dim=0)
             # trends mask
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
@@ -277,10 +273,13 @@ class BvhDataSet(Dataset):
             remove_idx=torch.zeros(28,dtype=torch.bool,device=self.device)  # 0: not remove / 1: remove
             for k in self.remove_list[i]:
                 remove_idx[k]=True
-                
-            assert positions.shape[0]==self.window+1 and positions.shape[2]==3
-            assert rotations.shape[0]==self.window+1 and rotations.shape[2]==3
-             
+            tgt_pos = self.positions[i][-1:]
+            tgt_rot = self.rotations[i][-1:]
+            assert positions.shape[0]==self.window and positions.shape[2]==3
+            assert rotations.shape[0]==self.window and rotations.shape[2]==3
+            assert trends.shape[0]==self.window 
+            if self.add_tgt:
+                return (positions,rotations,tgt_pos,tgt_rot,self.names[geo_id],frame_num,trends,self.geo[geo_id],remove_idx,idx)
             return (
                 positions,
                 rotations,
@@ -294,9 +293,9 @@ class BvhDataSet(Dataset):
 
 
 class ValToothDataSet(Dataset):
-    
     def __init__(self, bvh_folder,  window=50, offset=1,
-                 start_frame=0, fill_mode="missing-zero",device="cpu", dtype=torch.float32,complete_flag=False, augment_flag=True,add_geo=True):
+                 start_frame=0, fill_mode="missing-zero",device="cpu", 
+                 dtype=torch.float32,complete_flag=False, augment_flag=True,add_geo=True,add_tgt=False):
         """
         Bvh data set.
 
@@ -322,7 +321,7 @@ class ValToothDataSet(Dataset):
         self.augment=augment_flag
 
         self.add_geo=add_geo
-
+        self.add_tgt=add_tgt
         self.fill_mode=fill_mode    # 0:missing-zero 1:missing-mean 2:vacant-mean
         print(f"complete:{complete_flag} augment:{augment_flag} add_geo:{add_geo} fill_mode:{self.fill_mode}")
         
@@ -332,7 +331,7 @@ class ValToothDataSet(Dataset):
         else:
             self.bvh_folder=[os.path.join(bvh_folder,"complete"),os.path.join(bvh_folder,"incomplete")]
         # self.load_bvh_files()
-        json_root=r"/home/mjy/motion-inbetween"# r"E:\PROJECTS\tooth_spatial_temporal_transformer"
+        json_root=r"/home/mjy/teeth"# r"E:\PROJECTS\tooth_spatial_temporal_transformer"
         mode=['test','train','val']
         self.remove_dict={}
         for subdir in mode:
@@ -445,10 +444,6 @@ class ValToothDataSet(Dataset):
                 add_rot=self.rotations[i][end_idx-1:end_idx]
                 positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
                 rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
-            target_pos = self.positions[i][-1:]
-            target_rot = self.rotations[i][-1:]
-            positions=torch.cat([positions,target_pos],dim=0)
-            rotations=torch.cat([rotations,target_rot],dim=0)
             # trends mask
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
@@ -464,9 +459,13 @@ class ValToothDataSet(Dataset):
             remove_idx=torch.zeros(28,dtype=torch.bool,device=self.device)  # 0: not remove / 1: remove
             for k in self.remove_list[i]:
                 remove_idx[k]=True
-                
-            assert positions.shape[0]==self.window+1 and positions.shape[2]==3
-            assert rotations.shape[0]==self.window+1 and rotations.shape[2]==3
+            tgt_pos = self.positions[i][-1:]
+            tgt_rot = self.rotations[i][-1:]
+            assert positions.shape[0]==self.window and positions.shape[2]==3
+            assert rotations.shape[0]==self.window and rotations.shape[2]==3
+            assert trends.shape[0]==self.window 
+            if self.add_tgt:
+                return (positions,rotations,tgt_pos,tgt_rot,self.names[geo_id],frame_num,trends,self.geo[geo_id],remove_idx,idx)
             
             return (
                 positions,
