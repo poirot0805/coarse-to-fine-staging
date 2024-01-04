@@ -534,7 +534,7 @@ def train(config):
                 window_len, seq_slice, dtype, device)
 
             # prepare model input
-            x_gt = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rot_6d],dim=1)) if TGT_condition else get_model_input_sp(positions,rotations)
+            x_gt = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rot_6d],dim=1)) if TGT_condition else get_model_input_sp(positions,rot_6d)
             x_gt_zscore = (x_gt - mean) / std
             if add_geo_FLAG:
                 geo_ctrl = geo#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)#FIXME
@@ -858,7 +858,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         # tgt_rot = data_utils.matrix6D_to_9D_torch(tgt_rot6d)#TGT_FIXME
         pos_new, rot_new = evaluate(
             model, positions, rot_6d, seq_slice,
-            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None,tgt_pos=tgt_pos,tgt_rot6d=tgt_rot6d)
+            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None,tgt_pos=None,tgt_rot6d=None)
         
         if add_geo_FLAG or TGT_condition:
             positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
