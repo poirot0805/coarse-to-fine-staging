@@ -443,17 +443,19 @@ def train(config):
     min_benchmark_loss = float("inf")
     min_val_loss = float("inf")
     inter_pos,inter_rot9d,inter_rot6d = None,None,None
+    tgt_pos,tgt_rot,tgt_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
             if TGT_condition:
-                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data
+                assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
             else:
                 (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
-            assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
+            
             # trans
             # min_trans = min(frame_nums)-2
             # prob =random.uniform(0,1)
-            # trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
+            # trans_len = int(min_trans + prob*prob*(max_trans-min_trans))
             # trans_len = max_trans if trans_len>max_trans else trans_len
             trans_len = random.randint(min_trans, max_trans)
             
@@ -471,7 +473,7 @@ def train(config):
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
                 assert (inter_pos==positions).all()==False
             rot_6d = data_utils.matrix9D_to_6D_torch(rotations) # get-input需要的是6d
-            tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)
+            # tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot) #TGT_FIXME
             if add_geo_FLAG:
                 trends=torch.cat([torch.zeros([trends.shape[0],SEQNUM_GEO,trends.shape[-1]],dtype=dtype,device=device),
                                 trends],
@@ -492,8 +494,8 @@ def train(config):
                 positions[j,:,remove_list,:]=fill_value_p[remove_list,:]
                 rot_6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
                 # for target condition
-                tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
-                tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
+                # tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]    # TGT_FIXME
+                # tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]# TGT_FIXME
                 if add_geo_FLAG:
                     geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                     geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
@@ -532,7 +534,7 @@ def train(config):
                 window_len, seq_slice, dtype, device)
 
             # prepare model input
-            x_gt = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rot_6d],dim=1))#FIXME
+            x_gt = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rot_6d],dim=1)) if TGT_condition else get_model_input_sp(positions,rotations)
             x_gt_zscore = (x_gt - mean) / std
             if add_geo_FLAG:
                 geo_ctrl = geo#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)#FIXME
@@ -812,15 +814,16 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     for i, data in enumerate(data_loader, 0):
         if TGT_condition:
                 (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+                assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
         else:
                 (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
-        assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
+        
         
         if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
         rot_6d = data_utils.matrix9D_to_6D_torch(rotations)
-        tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)
+        # tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)#TGT_FIXME
         if add_geo_FLAG==False:
             geo = None
         # switch torch.tensor to list of list
@@ -838,8 +841,8 @@ def eval_on_dataset(config, data_loader, model, trans_len,
             positions[j,:,remove_list,:]=fill_value_p[remove_list,:]
             rot_6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
             
-            tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
-            tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
+            # tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]  #TGT_FIXME
+            # tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]#TGT_FIXME
             if add_geo_FLAG:
                 geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                 geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
@@ -852,7 +855,7 @@ def eval_on_dataset(config, data_loader, model, trans_len,
                 inter_x_zs = (inter_x - mean) / std
         # notice: rotations参与计算loss了
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
-        tgt_rot = data_utils.matrix6D_to_9D_torch(tgt_rot6d)
+        # tgt_rot = data_utils.matrix6D_to_9D_torch(tgt_rot6d)#TGT_FIXME
         pos_new, rot_new = evaluate(
             model, positions, rot_6d, seq_slice,
             indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None,tgt_pos=tgt_pos,tgt_rot6d=tgt_rot6d)
