@@ -256,29 +256,29 @@ def set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice):
         length = x[:,seq_slice].shape[1]
         expanded_tensor = x[:,seq_slice.start-1:seq_slice.start].expand(-1, length, -1, -1)
         x[:,seq_slice,:,p_slice]=expanded_tensor[...,p_slice].clone()
-    elif framework_MODE=="pred-mid":
-        p_slice=slice(6,9)
-        constrained_frames = [seq_slice.start - 1, seq_slice.stop]
-        constrained_frames.extend(midway_targets)
-        constrained_frames.sort()
-        for i in range(len(constrained_frames) - 2):
-            start_idx = constrained_frames[i]
-            end_idx = constrained_frames[i + 1]
-            start_slice = slice(start_idx, start_idx + 1)
-            end_slice = slice(end_idx, end_idx + 1)
-            inbetween_slice = slice(start_idx + 1, end_idx)
+    # elif framework_MODE=="pred-mid":
+    #     p_slice=slice(6,9)
+    #     constrained_frames = [seq_slice.start - 1, seq_slice.stop]
+    #     constrained_frames.extend(midway_targets)
+    #     constrained_frames.sort()
+    #     for i in range(len(constrained_frames) - 2):
+    #         start_idx = constrained_frames[i]
+    #         end_idx = constrained_frames[i + 1]
+    #         start_slice = slice(start_idx, start_idx + 1)
+    #         end_slice = slice(end_idx, end_idx + 1)
+    #         inbetween_slice = slice(start_idx + 1, end_idx)
 
-            x[..., inbetween_slice,:, p_slice] = \
-                benchmark.get_linear_interpolation2(
-                    x[..., start_slice,:, p_slice],
-                    x[..., end_slice,:,p_slice],
-                    end_idx - start_idx - 1
-            )
-        p_slice=slice(0,9)
-        tmp_slice = slice(constrained_frames[-2]+1, constrained_frames[-1])
-        length = x[:,tmp_slice].shape[1]
-        expanded_tensor = x[:,tmp_slice.start-1:tmp_slice.start].expand(-1, length, -1, -1)
-        x[:,tmp_slice,:,p_slice]=expanded_tensor[...,p_slice].clone()
+    #         x[..., inbetween_slice,:, p_slice] = \
+    #             benchmark.get_linear_interpolation2(
+    #                 x[..., start_slice,:, p_slice],
+    #                 x[..., end_slice,:,p_slice],
+    #                 end_idx - start_idx - 1
+    #         )
+    #     p_slice=slice(0,9)
+    #     tmp_slice = slice(constrained_frames[-2]+1, constrained_frames[-1])
+    #     length = x[:,tmp_slice].shape[1]
+    #     expanded_tensor = x[:,tmp_slice.start-1:tmp_slice.start].expand(-1, length, -1, -1)
+    #     x[:,tmp_slice,:,p_slice]=expanded_tensor[...,p_slice].clone()
     else:
         p_slice = slice(6,9)
         constrained_frames = [seq_slice.start - 1, seq_slice.stop]
@@ -443,19 +443,17 @@ def train(config):
     min_benchmark_loss = float("inf")
     min_val_loss = float("inf")
     inter_pos,inter_rot9d,inter_rot6d = None,None,None
-    tgt_pos,tgt_rot,tgt_rot6d = None,None,None
     while epoch < config["train"]["total_epoch"]:
         for i, data in enumerate(data_loader, 0):
             if TGT_condition:
-                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data
-                assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
+                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data 
             else:
                 (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
-            
+            assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
             # trans
             # min_trans = min(frame_nums)-2
             # prob =random.uniform(0,1)
-            # trans_len = int(min_trans + prob*prob*(max_trans-min_trans))
+            # trans_len = int(min_trans + math.sqrt(prob)*(max_trans-min_trans))
             # trans_len = max_trans if trans_len>max_trans else trans_len
             trans_len = random.randint(min_trans, max_trans)
             
@@ -473,7 +471,7 @@ def train(config):
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
                 assert (inter_pos==positions).all()==False
             rot_6d = data_utils.matrix9D_to_6D_torch(rotations) # get-input需要的是6d
-            # tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot) #TGT_FIXME
+            tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)
             if add_geo_FLAG:
                 trends=torch.cat([torch.zeros([trends.shape[0],SEQNUM_GEO,trends.shape[-1]],dtype=dtype,device=device),
                                 trends],
@@ -494,8 +492,8 @@ def train(config):
                 positions[j,:,remove_list,:]=fill_value_p[remove_list,:]
                 rot_6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
                 # for target condition
-                # tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]    # TGT_FIXME
-                # tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]# TGT_FIXME
+                tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
+                tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
                 if add_geo_FLAG:
                     geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                     geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
@@ -534,8 +532,10 @@ def train(config):
                 window_len, seq_slice, dtype, device)
 
             # prepare model input
-            x_gt = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rot_6d],dim=1)) if TGT_condition else get_model_input_sp(positions,rot_6d)
+            x_gt = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rot_6d],dim=1))#FIXME
+            tgt_pose = get_model_input_sp(tgt_pos,tgt_rot6d)
             x_gt_zscore = (x_gt - mean) / std
+            tgt_pose_zscore = (tgt_pose - mean) / std
             if add_geo_FLAG:
                 geo_ctrl = geo#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)#FIXME
                 if zscore_MODE=="seq":
@@ -557,6 +557,7 @@ def train(config):
                 ], dim=-1)
             if Data_Mask_MODE==2:
                 x[...,:12,-1]=2
+            x[:,target_idx:target_idx+1,:,:9]=tgt_pose_zscore.clone()
             x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
             if INIT_INTERP!="POS-ONLY":
                 x[...,SEQNUM_GEO:,rp_slice]=inter_x_zs
@@ -814,16 +815,15 @@ def eval_on_dataset(config, data_loader, model, trans_len,
     for i, data in enumerate(data_loader, 0):
         if TGT_condition:
                 (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data 
-                assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
         else:
                 (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
-        
+        assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
         
         if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
         rot_6d = data_utils.matrix9D_to_6D_torch(rotations)
-        # tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)#TGT_FIXME
+        tgt_rot6d = data_utils.matrix9D_to_6D_torch(tgt_rot)
         if add_geo_FLAG==False:
             geo = None
         # switch torch.tensor to list of list
@@ -841,8 +841,8 @@ def eval_on_dataset(config, data_loader, model, trans_len,
             positions[j,:,remove_list,:]=fill_value_p[remove_list,:]
             rot_6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
             
-            # tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]  #TGT_FIXME
-            # tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]#TGT_FIXME
+            tgt_pos[j,:,remove_list,:]=fill_value_p[remove_list,:]
+            tgt_rot6d[j,:,remove_list,:]=fill_value_r6d[remove_list,:]
             if add_geo_FLAG:
                 geo[j,:,remove_list,6:]=fill_value_p[remove_list,:]
                 geo[j,:,remove_list,:6]=fill_value_r6d[remove_list,:]
@@ -855,10 +855,10 @@ def eval_on_dataset(config, data_loader, model, trans_len,
                 inter_x_zs = (inter_x - mean) / std
         # notice: rotations参与计算loss了
         rotations = data_utils.matrix6D_to_9D_torch(rot_6d)
-        # tgt_rot = data_utils.matrix6D_to_9D_torch(tgt_rot6d)#TGT_FIXME
+        tgt_rot = data_utils.matrix6D_to_9D_torch(tgt_rot6d)
         pos_new, rot_new = evaluate(
             model, positions, rot_6d, seq_slice,
-            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None,tgt_pos=None,tgt_rot6d=None)
+            indices, mean, std, atten_mask, post_process,geo=geo,inter_x_zs = None,tgt_pos=tgt_pos,tgt_rot6d=tgt_rot6d)
         
         if add_geo_FLAG or TGT_condition:
             positions=torch.cat([torch.zeros([positions.shape[0],SEQNUM_GEO,*positions.shape[2:]],dtype=dtype,device=device),positions],dim=1) # GEO
@@ -990,6 +990,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         # prepare model input          
         geo_ctrl=None
         x_orig = get_model_input_sp(torch.cat([tgt_pos,positions],dim=1), torch.cat([tgt_rot6d,rotations],dim=1)) if tgt_pos is not None else get_model_input_sp(positions,rotations)
+        tgt_pose = (get_model_input_sp(tgt_pos,tgt_rot6d)-mean )/std if tgt_pos is not None else None
         x_zscore = (x_orig - mean) / std
         if geo is not None:
             geo_ctrl=geo #FIXME#get_model_input_geo(geo)   # GEO: (BATCH,SEQ,JOINT*9)
@@ -1020,7 +1021,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             ], dim=-1)
         if Data_Mask_MODE==2:
             x[...,:SEQNUM_GEO,-1]=2
-
+        x[:,target_idx:target_idx+1,:,:9]=tgt_pose.clone()
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
         x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
