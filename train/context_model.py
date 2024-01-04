@@ -18,7 +18,7 @@ ATTENTION_MODE = "NOMASK"   # //"VANILLA"   //"NOMASK"  //"PRE" //"SQUARE"
 INIT_INTERP = "POS-ONLY"
 zscore_MODE = "seq"
 Data_Mask_MODE = 1  # //0: no data mask //1: normal //2: geo mask =2
-framework_MODE = "in" # "pred"
+framework_MODE = "in" # "pred" "pred-mid"
 TGT_condition = False # True or False在pred模式下是否使用tgt作为输入
 def get_model_input_geo_old(geo):
     # (batch,seq,joint,9)
@@ -256,6 +256,29 @@ def set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice):
         length = x[:,seq_slice].shape[1]
         expanded_tensor = x[:,seq_slice.start-1:seq_slice.start].expand(-1, length, -1, -1)
         x[:,seq_slice,:,p_slice]=expanded_tensor[...,p_slice].clone()
+    elif framework_MODE=="pred-mid":
+        p_slice=slice(6,9)
+        constrained_frames = [seq_slice.start - 1, seq_slice.stop]
+        constrained_frames.extend(midway_targets)
+        constrained_frames.sort()
+        for i in range(len(constrained_frames) - 2):
+            start_idx = constrained_frames[i]
+            end_idx = constrained_frames[i + 1]
+            start_slice = slice(start_idx, start_idx + 1)
+            end_slice = slice(end_idx, end_idx + 1)
+            inbetween_slice = slice(start_idx + 1, end_idx)
+
+            x[..., inbetween_slice,:, p_slice] = \
+                benchmark.get_linear_interpolation2(
+                    x[..., start_slice,:, p_slice],
+                    x[..., end_slice,:,p_slice],
+                    end_idx - start_idx - 1
+            )
+        p_slice=slice(0,9)
+        tmp_slice = slice(constrained_frames[-2]+1, constrained_frames[-1])
+        length = x[:,tmp_slice].shape[1]
+        expanded_tensor = x[:,tmp_slice.start-1:tmp_slice.start].expand(-1, length, -1, -1)
+        x[:,tmp_slice,:,p_slice]=expanded_tensor[...,p_slice].clone()
     else:
         p_slice = slice(6,9)
         constrained_frames = [seq_slice.start - 1, seq_slice.stop]
@@ -438,7 +461,7 @@ def train(config):
             seq_slice = slice(context_len, target_idx)
             
             # get random midway target frames
-            if framework_MODE=="in":
+            if framework_MODE=="in" or framework_MODE=="pred-mid":
                 midway_targets = get_midway_targets(
                     seq_slice, midway_targets_amount, midway_targets_p)
             else:
