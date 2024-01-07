@@ -889,13 +889,13 @@ def eval_on_dataset(config, data_loader, model, trans_len,
             rot_error_avg.append(rot_error)
             # vis
             n_seq_slice=slice(context_len-1,target_idx)
-            target_idx = target_idx-SEQNUM_GEO
-            pos_gt =tmp_pos[:,:target_idx]
-            rot_gt =tmp_rot9d[:,:target_idx]
+            n_target_idx = target_idx-SEQNUM_GEO
+            pos_gt =tmp_pos[:,:n_target_idx]
+            rot_gt =tmp_rot9d[:,:n_target_idx]
             for j in range(remove_len):
                 remove_list=remove_idx[j]
-                pos_new[j,n_seq_slice,remove_list,:]=tmp_pos[j,:target_idx,remove_list,:]
-                rot_new[j,n_seq_slice,remove_list,:,:]=tmp_rot9d[j,:target_idx,remove_list,:,:]
+                pos_new[j,n_seq_slice,remove_list,:]=tmp_pos[j,:n_target_idx,remove_list,:]
+                rot_new[j,n_seq_slice,remove_list,:,:]=tmp_rot9d[j,:n_target_idx,remove_list,:,:]
             quat=data_utils.matrix9D_to_quat_torch(rot_gt)
             quat_new=data_utils.matrix9D_to_quat_torch(rot_new)
             for kk in range(pos_gt.shape[0]):
