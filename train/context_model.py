@@ -823,6 +823,8 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
         tmp_pos = positions.clone().detach()
         tmp_rot9d = rotations.clone().detach()
+        tmp_tgtpos = tgt_pos.clone().detach()
+        tmp_tgtrot = tgt_rot.clone().detach()
         if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
@@ -881,9 +883,9 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         
         #############################################
         if angle_save:
-            pos_error = benchmark.get_l2loss_batch(
-                positions[..., seq_slice, :, :].flatten(-2),
-                pos_new[..., seq_slice, :, :].flatten(-2))
+            delta = torch.square(positions[..., seq_slice, :, :] - pos_new[..., seq_slice, :, :])   # (batch, seq, joint, 3)
+            delta = torch.sqrt(torch.sum(delta, dim=-1))# (batch, seq, joint)
+            pos_error = torch.mean(delta, dim=(1,2)).cpu().numpy()  # (batch, )
             rot_error = get_angle_error(positions.shape[0],trans_len,rotations[:, seq_slice],rot_new[:, seq_slice],device)
             pos_error_avg.append(pos_error)
             rot_error_avg.append(rot_error)
@@ -894,24 +896,32 @@ def eval_on_dataset(config, data_loader, model, trans_len,
             rot_gt =tmp_rot9d[:,:n_target_idx]
             for j in range(remove_len):
                 remove_list=remove_idx[j]
-                pos_new[j,n_seq_slice,remove_list,:]=tmp_pos[j,:n_target_idx,remove_list,:]
-                rot_new[j,n_seq_slice,remove_list,:,:]=tmp_rot9d[j,:n_target_idx,remove_list,:,:]
+                pos_new[j,SEQNUM_GEO:,remove_list,:]=tmp_pos[j,:,remove_list,:]
+                rot_new[j,SEQNUM_GEO:,remove_list,:,:]=tmp_rot9d[j,:,remove_list,:,:]
+            n_seq_slice=slice(context_len-1,target_idx)
+            pos_new=pos_new[:,seq_slice]
+            rot_new=rot_new[:,seq_slice]
             quat=data_utils.matrix9D_to_quat_torch(rot_gt)
             quat_new=data_utils.matrix9D_to_quat_torch(rot_new)
+            tgt_quat = data_utils.matrix9D_to_quat_torch(tmp_tgtrot)
+            pos_gt=torch.cat([pos_gt,tmp_tgtpos],dim=1)
+            pos_new=torch.cat([pos_new,tmp_tgtpos],dim=1)
+            quat=torch.cat([quat,tgt_quat],dim=1)
+            quat_new=torch.cat([quat_new,tgt_quat],dim=1)
             for kk in range(pos_gt.shape[0]):
-                if start_idx[kk]%10==0:
+                if start_idx[kk]%20==0:
                     datapath,name=os.path.split(names[kk])
                     basename,exp=os.path.splitext(name)
                     tmp_removeidx=[int(mm) for mm in remove_idx[kk]]
-                    json_path_gt = "./res0107_short_tgt/{}_{}_{}_idx{}_trans{}_gt.json".format(
+                    json_path_gt = "./res0108_short_tgt/{}_{}_{}_idx{}_trans{}_gt.json".format(
                         config["name"], "val", basename,start_idx[kk],trans_len)
                     visualization.save_data_to_json_tooth(
-                        json_path_gt, pos_gt[kk], quat[kk],gpos_batch_loss[kk], gquat_batch_loss[kk],start_idx,trans_len,remove_idx=tmp_removeidx)
+                        json_path_gt, pos_gt[kk], quat[kk],gpos_batch_loss[kk], gquat_batch_loss[kk],start_idx[kk].item(),trans_len,frame_nums[kk].item(),remove_idx=tmp_removeidx)
 
-                    json_path = "./res0107_short_tgt/{}_{}_{}_idx{}_trans{}.json".format(
+                    json_path = "./res0108_short_tgt/{}_{}_{}_idx{}_trans{}.json".format(
                         config["name"], "val", basename,start_idx[kk],trans_len)
                     visualization.save_data_to_json_tooth(
-                        json_path, pos_new[kk], quat_new[kk],gpos_batch_loss[kk], gquat_batch_loss[kk],start_idx,trans_len,remove_idx=tmp_removeidx)
+                        json_path, pos_new[kk], quat_new[kk],gpos_batch_loss[kk], gquat_batch_loss[kk],start_idx[kk].item(),trans_len,frame_nums[kk].item(),remove_idx=tmp_removeidx)
 
         p_loss_avg.append(p_loss.item())
         smooth_loss_avg.append(smooth_loss.item())

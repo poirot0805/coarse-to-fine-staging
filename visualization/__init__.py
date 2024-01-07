@@ -44,7 +44,7 @@ def save_data_to_json(json_path, positions, rotations, foot_contact,
         json.dump(data, fh)
 
 
-def save_data_to_json_tooth(json_path, positions, rotations,gpos_loss,gquat_loss,sparse,dense,remove_idx=[]):
+def save_data_to_json_tooth(json_path, positions, rotations,gpos_loss,gquat_loss,sparse,dense,frame,remove_idx=[]):
     """
     Save animation data to json.
 
@@ -68,6 +68,9 @@ def save_data_to_json_tooth(json_path, positions, rotations,gpos_loss,gquat_loss
             "gpos_loss": np.float64(gpos_loss),
             "gquat_loss":np.float64(gquat_loss),
             "keyframe_id":key_list,
-            "remove_idx":remove_idx
+            "remove_idx":remove_idx,
+            "start_idx":sparse,
+            "trans":dense,
+            "step":frame
         }
         json.dump(data, fh)
