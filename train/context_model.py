@@ -7,7 +7,7 @@ import math
 import torch
 from torch.optim import Adam
 
-from motion_inbetween_space import benchmark
+from motion_inbetween_space import benchmark,visualization
 from motion_inbetween_space.model import STTransformer
 from motion_inbetween_space.data import utils_torch as data_utils
 from motion_inbetween_space.train import rmi
@@ -564,7 +564,7 @@ def train(config):
             # calculate model output y
             optimizer.zero_grad()
             model.train()
-
+            # TODO:reshape geo
             model_out = model(x, keyframe_pos_idx, mask=atten_mask)
             if config["train"]["trends_loss"]:
                 c_out = trends.clone().detach()
@@ -774,7 +774,7 @@ def train(config):
 
 
 def eval_on_dataset(config, data_loader, model, trans_len,
-                    debug=False, post_process=False):
+                    debug=False, post_process=False,angle_save=False):
     global INIT_INTERP
     global SEQNUM_GEO
     global TGT_condition
@@ -809,16 +809,20 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
     p_loss_avg = []
     smooth_loss_avg = []
+    
+    pos_error_avg=[]
+    rot_error_avg=[]
     add_geo_FLAG = config["train"]["add_geo"]
     if add_geo_FLAG==False and TGT_condition==False:
         assert SEQNUM_GEO==0
     for i, data in enumerate(data_loader, 0):
         if TGT_condition:
-                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+                (positions, rotations, tgt_pos,tgt_rot,names, frame_nums, start_idx, geo, remove_idx, data_idx) = data 
         else:
-                (positions, rotations, names, frame_nums, trends, geo, remove_idx, data_idx) = data 
+                (positions, rotations, names, frame_nums, start_idx, geo, remove_idx, data_idx) = data 
         assert tgt_pos.shape[1]==1 and len(tgt_pos.shape)==4
-        
+        tmp_pos = positions.clone().detach()
+        tmp_rot9d = rotations.clone().detach()
         if INIT_INTERP!="POS-ONLY":
                 inter_pos, inter_rot9d = get_interp_pos_rot(positions, rotations, seq_slice)
                 inter_rot6d = data_utils.matrix9D_to_6D_torch(inter_rot9d)
@@ -874,6 +878,40 @@ def eval_on_dataset(config, data_loader, model, trans_len,
 
         smooth_loss = train_utils.cal_smooth_loss(pos_new, seq_slice)   # FIXME:rot要不要加进去
         p_loss = train_utils.cal_p_loss(positions, pos_new, seq_slice)
+        
+        #############################################
+        if angle_save:
+            pos_error = benchmark.get_l2loss_batch(
+                positions[..., seq_slice, :, :].flatten(-2),
+                pos_new[..., seq_slice, :, :].flatten(-2))
+            rot_error = get_angle_error(positions.shape[0],trans_len,rotations[:, seq_slice],rot_new[:, seq_slice],device)
+            pos_error_avg.append(pos_error)
+            rot_error_avg.append(rot_error)
+            # vis
+            n_seq_slice=slice(context_len-1,target_idx)
+            target_idx = target_idx-SEQNUM_GEO
+            pos_gt =tmp_pos[:,:target_idx]
+            rot_gt =tmp_rot9d[:,:target_idx]
+            for j in range(remove_len):
+                remove_list=remove_idx[j]
+                pos_new[j,n_seq_slice,remove_list,:]=tmp_pos[j,:target_idx,remove_list,:]
+                rot_new[j,n_seq_slice,remove_list,:,:]=tmp_rot9d[j,:target_idx,remove_list,:,:]
+            quat=data_utils.matrix9D_to_quat_torch(rot_gt)
+            quat_new=data_utils.matrix9D_to_quat_torch(rot_new)
+            for kk in range(pos_gt.shape[0]):
+                if start_idx[kk]%10==0:
+                    datapath,name=os.path.split(names[kk])
+                    basename,exp=os.path.splitext(name)
+                    tmp_removeidx=[int(mm) for mm in remove_idx[kk]]
+                    json_path_gt = "./res0107_short_tgt/{}_{}_{}_idx{}_trans{}_gt.json".format(
+                        config["name"], "val", basename,start_idx[kk],trans_len)
+                    visualization.save_data_to_json_tooth(
+                        json_path_gt, pos_gt[kk], quat[kk],gpos_batch_loss[kk], gquat_batch_loss[kk],start_idx,trans_len,remove_idx=tmp_removeidx)
+
+                    json_path = "./res0107_short_tgt/{}_{}_{}_idx{}_trans{}.json".format(
+                        config["name"], "val", basename,start_idx[kk],trans_len)
+                    visualization.save_data_to_json_tooth(
+                        json_path, pos_new[kk], quat_new[kk],gpos_batch_loss[kk], gquat_batch_loss[kk],start_idx,trans_len,remove_idx=tmp_removeidx)
 
         p_loss_avg.append(p_loss.item())
         smooth_loss_avg.append(smooth_loss.item())
@@ -907,6 +945,10 @@ def eval_on_dataset(config, data_loader, model, trans_len,
         loss_data.reverse()
 
         return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(), loss_data
+    elif angle_save:
+        pos_error_mm = np.concatenate(pos_error_avg, axis=0)
+        rot_error_angle = np.concatenate(rot_error_avg, axis=0)
+        return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(),p_loss_avg.mean(),smooth_loss_avg.mean(),pos_error_mm.mean(),rot_error_angle.mean()
     else:
         return gpos_loss.mean(), gquat_loss.mean(), npss_loss.sum(),p_loss_avg.mean(),smooth_loss_avg.mean()
 
@@ -1021,7 +1063,7 @@ def evaluate(model, positions, rotations, seq_slice, indices,
             ], dim=-1)
         if Data_Mask_MODE==2:
             x[...,:SEQNUM_GEO,-1]=2
-        x[:,target_idx:target_idx+1,:,:9]=tgt_pose.clone()
+        # x[:,target_idx:target_idx+1,:,:9]=tgt_pose.clone()
         p_slice = slice(indices["p_start_idx"], indices["p_end_idx"])
         r_slice = slice(indices["r_start_idx"], indices["r_end_idx"])
         x = set_placeholder_root_pos_sp(x, seq_slice, midway_targets, p_slice)#FIXME
@@ -1057,3 +1099,30 @@ def evaluate(model, positions, rotations, seq_slice, indices,
         #     y, indices, rotations, seq_slice)
 
         return pos_new, rot_new
+
+def process_rotation(r):
+        x, y, z = r[:, 0], r[:, 1], r[:, 2]
+        angles = np.arccos(np.clip([np.dot(x, [1, 0, 0]), 
+                                    np.dot(y, [0, 1, 0]), 
+                                    np.dot(z, [0, 0, 1])], -1, 1))
+        return angles
+def process_rotation_tensor(r,device):
+    E = torch.eye(3,device=device)
+    t = torch.multiply(E, r).diag()
+    angles = torch.acos(torch.clamp(t, -1.0, 1.0))
+    return angles
+
+def get_angle_error(batch, seq_num, a, b,device):
+    # Preallocate tensor for results
+    res = torch.zeros(batch, seq_num, 28)
+
+    for i in range(batch):
+        for j in range(seq_num):
+            for k in range(28):
+                res_a = process_rotation_tensor(a[i, j, k],device)
+                res_b = process_rotation_tensor(b[i, j, k],device)
+                res[i, j, k] = torch.sum(torch.abs(res_a - res_b))
+
+    # Compute mean across seq_num and 28 dimensions for each batch
+    mean_res = torch.mean(res, dim=(1, 2))
+    return mean_res.cpu().numpy()

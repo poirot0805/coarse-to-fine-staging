@@ -259,6 +259,7 @@ class BvhDataSet(Dataset):
                 positions=torch.cat([temp_positions,add_pos.expand([extend_length,*add_pos.shape[1:]])],dim=0)
                 rotations=torch.cat([temp_rotations,add_rot.expand([extend_length,*add_rot.shape[1:]])],dim=0)
             # trends mask
+            """
             zeros_shape = [1,28]
             zeros = torch.zeros(*zeros_shape, dtype=self.dtype,device=self.device)
             b=(positions[1:,:,:]-positions[:-1,:,:]!=0)
@@ -267,6 +268,8 @@ class BvhDataSet(Dataset):
             x2=torch.any(c,dim=-1)
             temp_trend=torch.logical_or(x,x2)
             trends=torch.cat([zeros,temp_trend],dim=0).type(self.dtype)
+            """
+            
             # trends=trends.unsqueeze(2)
             # 1：move 0:static
             geo_id=self.geoids[i]
@@ -277,15 +280,15 @@ class BvhDataSet(Dataset):
             tgt_rot = self.rotations[i][-1:]
             assert positions.shape[0]==self.window and positions.shape[2]==3
             assert rotations.shape[0]==self.window and rotations.shape[2]==3
-            assert trends.shape[0]==self.window 
+            #assert trends.shape[0]==self.window 
             if self.add_tgt:
-                return (positions,rotations,tgt_pos,tgt_rot,self.names[geo_id],frame_num,trends,self.geo[geo_id],remove_idx,idx)
+                return (positions,rotations,tgt_pos,tgt_rot,self.names[geo_id],frame_num,start_idx,self.geo[geo_id],remove_idx,idx)
             return (
                 positions,
                 rotations,
                 self.names[geo_id],
                 frame_num,
-                trends,
+                start_idx,
                 self.geo[geo_id],
                 remove_idx,
                 idx
